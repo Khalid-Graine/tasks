@@ -1,0 +1,7 @@
+[build]
+  command = "cd my-task-app && npm run build"
+  publish = "my-task-app/dist"
+
+[dev]
+  command = "cd my-task-app && npm run dev"
+  port = 5173
