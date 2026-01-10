@@ -19,12 +19,26 @@ body {
   @apply flex items-center justify-between px-4 py-3 rounded-lg shadow-sm bg-white dark:bg-slate-800;
 }
 
-.task-text {
-  @apply break-words;
+.btn {
+  @apply inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium border border-transparent bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 h-10;
+}
+.btn-danger {
+  @apply bg-red-600 text-white hover:bg-red-700 h-10;
+}
+}
+/* Respect iPhone/Android safe area insets */
+:root {
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
 }
 
-.btn {
-  @apply inline-flex items-center gap-2 px-3 py-1 rounded-md text-sm font-medium border border-transparent bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600;
+.app-shell {
+  padding-top: calc(1rem + var(--safe-area-inset-top));
+  padding-bottom: calc(1rem + var(--safe-area-inset-bottom));
+  padding-left: calc(1rem + var(--safe-area-inset-left));
+  padding-right: calc(1rem + var(--safe-area-inset-right));
 }
 
 .btn-danger {

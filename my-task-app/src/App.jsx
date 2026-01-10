@@ -186,8 +186,8 @@ function App() {
   const doneTasks = tasks.filter(t => t.completed).length;
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-lg">
+    <div className="min-h-screen flex items-center justify-center app-shell">
+      <div className="w-full max-w-sm sm:max-w-md md:max-w-lg">
         <header className="flex items-center justify-between mb-4">
           <h1 className="text-2xl font-semibold">📌 My Task Tracker</h1>
           <div className="flex items-center space-x-3">
