@@ -1,5 +1,6 @@
 [build]
-  command = "cd my-task-app && npm run build"
+  # Ensure dependencies are installed inside the subfolder before building
+  command = "cd my-task-app && npm install && npm run build"
   publish = "my-task-app/dist"
 
 [dev]
