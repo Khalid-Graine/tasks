@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { db } from './firebase';
-import { collection, addDoc, onSnapshot, query, updateDoc, doc } from "firebase/firestore";
+import { collection, addDoc, onSnapshot, query, updateDoc, doc, deleteDoc } from "firebase/firestore";
 
 function App() {
   const [tasks, setTasks] = useState(() => {
@@ -150,35 +150,85 @@ function App() {
     }
   };
 
+  const handleDelete = async (task, e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    // If local-only, just remove locally
+    if (String(task.id).startsWith('local-')) {
+      setTasks(prev => prev.filter(t => t.id !== task.id));
+      return;
+    }
+
+    // Optimistically remove locally
+    setTasks(prev => prev.filter(t => t.id !== task.id));
+    try {
+      await deleteDoc(doc(db, 'tasks', task.id));
+    } catch (err) {
+      console.warn('Failed to delete from Firestore, restoring locally', err);
+      // restore task on failure
+      setTasks(prev => [task, ...prev]);
+    }
+  };
+
+  // Dark mode handling
+  const [dark, setDark] = useState(() => {
+    try {
+      const v = localStorage.getItem('dark');
+      return v === '1' || (v === null && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    } catch (e) { return false; }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('dark', dark ? '1' : '0');
+      if (dark) document.documentElement.classList.add('dark'); else document.documentElement.classList.remove('dark');
+    } catch (e) { }
+  }, [dark]);
+
   const doneTasks = tasks.filter(t => t.completed).length;
 
   return (
-    <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <h1 style={{ margin: 0 }}>📌 My Task Tracker</h1>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 12, color: isOnline ? 'green' : 'gray' }}>{isOnline ? 'Online' : 'Offline'}</div>
-          <div style={{ fontSize: 12, color: syncStatus === 'failed' ? 'crimson' : '#666' }}>{syncStatus === 'syncing' ? 'Syncing…' : syncStatus === 'synced' ? 'All synced' : syncStatus === 'failed' ? 'Sync failed' : ''}</div>
-        </div>
+    <div className="min-h-screen flex items-center justify-center px-4 py-8">
+      <div className="w-full max-w-lg">
+        <header className="flex items-center justify-between mb-4">
+          <h1 className="text-2xl font-semibold">📌 My Task Tracker</h1>
+          <div className="flex items-center space-x-3">
+            <div className={`text-sm ${isOnline ? 'text-green-500' : 'text-gray-400'}`}>{isOnline ? 'Online' : 'Offline'}</div>
+            <button className="btn" onClick={() => syncLocalTasks()} disabled={!isOnline || syncingRef.current}>Sync now</button>
+            <button className="btn" onClick={() => setDark(d => !d)} aria-pressed={dark}>{dark ? '🌙' : '☀️'}</button>
+          </div>
+        </header>
+
+        <form onSubmit={handleAdd} className="flex gap-2 mb-4">
+          <input
+            className="flex-1 px-4 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Add a task..."
+            aria-label="Add task"
+          />
+          <button className="btn" type="submit">Add</button>
+        </form>
+
+        {syncError && <div className="text-sm text-red-500 mb-3">{syncError}</div>}
+
+        <ul className="space-y-3">
+          {tasks.map((task) => (
+            <li key={task.id} className="task-item" onClick={() => toggleComplete(task)}>
+              <div className="flex items-center gap-3">
+                <input type="checkbox" checked={!!task.completed} onChange={() => toggleComplete(task)} onClick={(e) => e.stopPropagation()} />
+                <div className={`task-text ${task.completed ? 'line-through text-slate-400' : ''}`}>{task.text}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                {String(task.id).startsWith('local-') && <span className="text-xs text-gray-500">local</span>}
+                <button className="btn btn-danger" onClick={(e) => handleDelete(task, e)} aria-label={`Delete ${task.text}`}>Delete</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        <footer className="mt-6 text-sm text-slate-500">
+          Done: {doneTasks} / {tasks.length}
+        </footer>
       </div>
-      <form onSubmit={handleAdd} style={{ marginBottom: 12 }}>
-        <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Add a task..." />
-        <button type="submit">Add</button>
-      </form>
-      {syncError && <div style={{ color: 'crimson', marginBottom: 8 }}>{syncError}</div>}
-      <div style={{ marginBottom: 8 }}>
-        <button onClick={() => syncLocalTasks()} disabled={!isOnline || syncingRef.current}>Sync now</button>
-      </div>
-      <ul>
-        {tasks.map((task) => (
-          <li key={task.id} onClick={() => toggleComplete(task)}
-              style={{ textDecoration: task.completed ? 'line-through' : 'none', cursor: 'pointer', opacity: String(task.id).startsWith('local-') ? 0.8 : 1 }}>
-            {task.text} {String(task.id).startsWith('local-') && <small style={{ color: '#888', marginLeft: 8 }}>(local)</small>}
-          </li>
-        ))}
-      </ul>
-      <hr />
-      <h3>Done: {doneTasks} / {tasks.length}</h3>
     </div>
   );
 }
