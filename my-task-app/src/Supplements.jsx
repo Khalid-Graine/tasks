@@ -45,110 +45,98 @@ export default function Supplements() {
   const [editName, setEditName] = useState('');
   const [editDose, setEditDose] = useState('');
 
+  // persist to localStorage whenever data changes
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) {}
-      // Firestore listeners: sync supplements and history so data is shared across users
-      useEffect(() => {
-        const unsubSupp = onSnapshot(collection(db, 'supplements'), (snap) => {
-          const serverItems = [];
-          snap.forEach(d => serverItems.push({ ...d.data(), id: d.id }));
-          setData(prev => ({ ...prev, items: serverItems }));
-        }, (err) => console.warn('supplements onSnapshot', err));
-
-        const unsubHist = onSnapshot(collection(db, 'supplementHistory'), (snap) => {
-          const h = {};
-          snap.forEach(d => { h[d.id] = d.data().taken || []; });
-          setData(prev => ({ ...prev, history: h }));
-        }, (err) => console.warn('supplementHistory onSnapshot', err));
-
-        return () => { unsubSupp(); unsubHist(); };
-      }, []);
   }, [data]);
 
-  const add = (e) => {
+  // Firestore listeners: sync supplements and history so data is shared across users
+  useEffect(() => {
+    const unsubSupp = onSnapshot(collection(db, 'supplements'), (snap) => {
+      const serverItems = [];
+      snap.forEach(d => serverItems.push({ ...d.data(), id: d.id }));
+      setData(prev => ({ ...prev, items: serverItems }));
+    }, (err) => console.warn('supplements onSnapshot', err));
+
+    const unsubHist = onSnapshot(collection(db, 'supplementHistory'), (snap) => {
+      const h = {};
+      snap.forEach(d => { h[d.id] = d.data().taken || []; });
+      setData(prev => ({ ...prev, history: h }));
+    }, (err) => console.warn('supplementHistory onSnapshot', err));
+
+    return () => { unsubSupp(); unsubHist(); };
+  }, []);
+
+  const add = async (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    const it = { id: Date.now().toString(), name: name.trim(), dose: dose.trim(), createdAt: Date.now() };
-    setData(prev => ({ ...prev, items: [it, ...prev.items] }));
+    const item = { name: name.trim(), dose: dose.trim(), createdAt: Date.now() };
+    const tempId = 'local-' + Date.now();
+    // optimistic local update with temporary id
+    setData(prev => ({ ...prev, items: [{ ...item, id: tempId }, ...prev.items] }));
     setName(''); setDose('');
-      const it = { name: name.trim(), dose: dose.trim(), createdAt: Date.now() };
-      // optimistic local update; server will replace with real id
-      setData(prev => ({ ...prev, items: [{ ...it, id: 'local-' + Date.now() }, ...prev.items] }));
-      setName(''); setDose('');
-      (async () => {
-        try {
-          await addDoc(collection(db, 'supplements'), it);
-        } catch (err) {
-          console.warn('Failed to add supplement to Firestore, kept locally', err);
-        }
-      })();
+
+    try {
+      const docRef = await addDoc(collection(db, 'supplements'), item);
+      // replace temp id with real id from server
+      setData(prev => ({ ...prev, items: prev.items.map(x => x.id === tempId ? { ...x, id: docRef.id } : x) }));
+    } catch (err) {
+      console.warn('Failed to add supplement to Firestore, kept locally', err);
+    }
   };
 
   const remove = (id) => {
+    // optimistic local removal
     setData(prev => {
       const items = prev.items.filter(i => i.id !== id);
-      // remove id from all history entries
       const history = Object.fromEntries(Object.entries(prev.history).map(([k, v]) => [k, v.filter(x => x !== id)]));
-      return { items, history };
-        // optimistic local removal
-        setData(prev => {
-          const items = prev.items.filter(i => i.id !== id);
-          const history = Object.fromEntries(Object.entries(prev.history).map(([k, v]) => [k, v.filter(x => x !== id)]));
-          return { ...prev, items, history };
-        });
-
-        (async () => {
-          try {
-            // remove from supplements collection (if it's a server id)
-            if (!String(id).startsWith('local-')) await deleteDoc(doc(db, 'supplements', id));
-            // remove this id from all history docs
-            const snaps = await getDocs(collection(db, 'supplementHistory'));
-            for (const d of snaps.docs) {
-              const taken = d.data().taken || [];
-              if (taken.includes(id)) {
-                await updateDoc(doc(db, 'supplementHistory', d.id), { taken: arrayRemove(id) });
-              }
-            }
-          } catch (err) {
-            console.warn('Failed to remove supplement from Firestore', err);
-          }
-        })();
+      return { ...prev, items, history };
     });
+
+    (async () => {
+      try {
+        // remove from supplements collection (if it's a server id)
+        if (!String(id).startsWith('local-')) await deleteDoc(doc(db, 'supplements', id));
+        // remove this id from all history docs
+        const snaps = await getDocs(collection(db, 'supplementHistory'));
+        for (const d of snaps.docs) {
+          const taken = d.data().taken || [];
+          if (taken.includes(id)) {
+            await updateDoc(doc(db, 'supplementHistory', d.id), { taken: arrayRemove(id) });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to remove supplement from Firestore', err);
+      }
+    })();
   };
 
-  const toggleTaken = (id) => {
+  const toggleTaken = async (id) => {
+    const hk = selectedDate;
+    const currently = isTaken(id, hk);
+    // optimistic local update
     setData(prev => {
-      const hk = selectedDate;
       const day = prev.history[hk] ? [...prev.history[hk]] : [];
       const idx = day.indexOf(id);
       if (idx === -1) day.push(id); else day.splice(idx, 1);
       return { ...prev, history: { ...prev.history, [hk]: day } };
-        const hk = selectedDate;
-        const docRef = doc(db, 'supplementHistory', hk);
-        const currently = isTaken(id, hk);
-        // optimistic local update
-        setData(prev => {
-          const day = prev.history[hk] ? [...prev.history[hk]] : [];
-          const idx = day.indexOf(id);
-          if (idx === -1) day.push(id); else day.splice(idx, 1);
-          return { ...prev, history: { ...prev.history, [hk]: day } };
-        });
-
-        try {
-          if (currently) {
-            await updateDoc(docRef, { taken: arrayRemove(id) });
-          } else {
-            try {
-              await updateDoc(docRef, { taken: arrayUnion(id) });
-            } catch (err) {
-              // doc might not exist yet
-              await setDoc(docRef, { taken: [id] });
-            }
-          }
-        } catch (err) {
-          console.warn('Failed to toggle taken in Firestore', err);
-        }
     });
+
+    const docRef = doc(db, 'supplementHistory', hk);
+    try {
+      if (currently) {
+        await updateDoc(docRef, { taken: arrayRemove(id) });
+      } else {
+        try {
+          await updateDoc(docRef, { taken: arrayUnion(id) });
+        } catch (err) {
+          // doc might not exist yet
+          await setDoc(docRef, { taken: [id] });
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to toggle taken in Firestore', err);
+    }
   };
 
   const isTaken = (id, dateKey = selectedDate) => {
