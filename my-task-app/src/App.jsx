@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import Header from './components/Header';
+import SideDrawer from './components/SideDrawer';
 import { db } from './firebase';
 import Supplements from './Supplements';
 import { collection, addDoc, onSnapshot, query, updateDoc, doc, deleteDoc } from "firebase/firestore";
@@ -119,6 +121,13 @@ function TasksPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline]);
 
+  // listen for manual sync triggered from header
+  useEffect(() => {
+    const h = () => { syncLocalTasks().catch(err => console.warn('Manual sync failed', err)); };
+    window.addEventListener('manual-sync', h);
+    return () => window.removeEventListener('manual-sync', h);
+  }, []);
+
   const handleAdd = async (e) => {
     e.preventDefault();
     if (input.trim() === '') return;
@@ -188,19 +197,13 @@ function TasksPage() {
   const doneTasks = tasks.filter(t => t.completed).length;
 
   return (
-    <div className="min-h-screen flex items-center justify-center app-shell">
-      <div className="w-full max-w-sm sm:max-w-md md:max-w-lg">
-        <header className="flex items-center justify-between mb-4">
-          <h1 className="text-2xl font-semibold">📌 My Task Tracker</h1>
-          <div className="mr-4">
-            <Link to="/supplements" className="text-sm text-sky-600 hover:underline">Supplements</Link>
-          </div>
-          <div className="flex items-center space-x-3">
-            <div className={`text-sm ${isOnline ? 'text-green-500' : 'text-gray-400'}`}>{isOnline ? 'Online' : 'Offline'}</div>
-            <button className="btn" onClick={() => syncLocalTasks()} disabled={!isOnline || syncingRef.current}>Sync now</button>
-            <button className="btn" onClick={() => setDark(d => !d)} aria-pressed={dark}>{dark ? '🌙' : '☀️'}</button>
-          </div>
-        </header>
+    <div className="min-h-screen app-shell">
+      <div className="pt-16 flex items-center justify-center">
+        <div className="w-full max-w-sm sm:max-w-md md:max-w-lg">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-medium">Tasks</h2>
+          <div className={`text-sm ${isOnline ? 'text-green-500' : 'text-gray-400'}`}>{isOnline ? 'Online' : 'Offline'}</div>
+        </div>
 
         <form onSubmit={handleAdd} className="flex gap-2 mb-4">
           <input
@@ -230,21 +233,53 @@ function TasksPage() {
           ))}
         </ul>
 
-        <footer className="mt-6 text-sm text-slate-500">
-          Done: {doneTasks} / {tasks.length}
-        </footer>
+        <footer className="mt-6 text-sm text-slate-500">Done: {doneTasks} / {tasks.length}</footer>
+        </div>
       </div>
     </div>
   );
 }
 
 function App() {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [dark, setDark] = useState(() => {
+    try {
+      const v = localStorage.getItem('dark');
+      return v === '1' || (v === null && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    } catch (e) { return false; }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dark', dark ? '1' : '0');
+      if (dark) document.documentElement.classList.add('dark'); else document.documentElement.classList.remove('dark');
+    } catch (e) { }
+  }, [dark]);
+
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, []);
+
+  const handleSync = () => {
+    // emit a window event that TasksPage listens to for manual sync
+    window.dispatchEvent(new Event('manual-sync'));
+  };
+
   return (
     <Router>
-      <Routes>
-        <Route path="/" element={<TasksPage />} />
-        <Route path="/supplements" element={<Supplements />} />
-      </Routes>
+      <Header onToggle={() => setDrawerOpen(d => !d)} open={drawerOpen} onSync={handleSync} isOnline={isOnline} onToggleDark={() => setDark(d => !d)} dark={dark} />
+      <SideDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <main>
+        <Routes>
+          <Route path="/" element={<TasksPage />} />
+          <Route path="/supplements" element={<Supplements />} />
+        </Routes>
+      </main>
     </Router>
   );
 }
