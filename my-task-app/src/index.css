@@ -13,6 +13,21 @@ html, body, #root {
   overflow-x: hidden;
 }
 
+/* Box sizing and media fit */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+img, svg, video {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+input, button, select, textarea {
+  max-width: 100%;
+}
+
 :root {
   --bg: #f8fafc;
   --text: #0f172a;
@@ -28,6 +43,11 @@ body {
 
 .task-item {
   @apply flex items-center justify-between px-4 py-3 rounded-lg shadow-sm bg-white dark:bg-slate-800;
+  flex-wrap: wrap;
+}
+
+.task-item > div {
+  min-width: 0;
 }
 
 .btn {
