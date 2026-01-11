@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
+import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import { db } from './firebase';
+import Supplements from './Supplements';
 import { collection, addDoc, onSnapshot, query, updateDoc, doc, deleteDoc } from "firebase/firestore";
 
-function App() {
+function TasksPage() {
   const [tasks, setTasks] = useState(() => {
     try {
       const saved = localStorage.getItem('tasks');
@@ -190,6 +192,9 @@ function App() {
       <div className="w-full max-w-sm sm:max-w-md md:max-w-lg">
         <header className="flex items-center justify-between mb-4">
           <h1 className="text-2xl font-semibold">📌 My Task Tracker</h1>
+          <div className="mr-4">
+            <Link to="/supplements" className="text-sm text-sky-600 hover:underline">Supplements</Link>
+          </div>
           <div className="flex items-center space-x-3">
             <div className={`text-sm ${isOnline ? 'text-green-500' : 'text-gray-400'}`}>{isOnline ? 'Online' : 'Offline'}</div>
             <button className="btn" onClick={() => syncLocalTasks()} disabled={!isOnline || syncingRef.current}>Sync now</button>
@@ -230,6 +235,17 @@ function App() {
         </footer>
       </div>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/" element={<TasksPage />} />
+        <Route path="/supplements" element={<Supplements />} />
+      </Routes>
+    </Router>
   );
 }
 
