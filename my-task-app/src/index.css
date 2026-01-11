@@ -7,6 +7,17 @@
   --text: #0f172a;
 }
 
+/* Prevent horizontal overflow on small screens */
+html, body, #root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+:root {
+  --bg: #f8fafc;
+  --text: #0f172a;
+}
+
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
 }
