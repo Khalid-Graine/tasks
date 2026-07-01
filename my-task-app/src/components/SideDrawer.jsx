@@ -12,6 +12,7 @@ export default function SideDrawer({ open, onClose }) {
         </div>
         <nav className="p-4 space-y-2">
           <Link to="/" onClick={onClose} className="block px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800">Home</Link>
+          <Link to="/math" onClick={onClose} className="block px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800">Math</Link>
           <Link to="/supplements" onClick={onClose} className="block px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800">Supplements</Link>
         </nav>
       </aside>

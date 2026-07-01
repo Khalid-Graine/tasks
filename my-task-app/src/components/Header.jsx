@@ -11,6 +11,7 @@ export default function Header({ onToggle, open, onSync, isOnline, onToggleDark,
         <Link to="/" className="text-lg font-semibold truncate">📌 My Task Tracker</Link>
 
         <nav className="ml-auto hidden md:flex items-center gap-3">
+          <Link to="/math" className="text-sm text-sky-600 hover:underline">Math</Link>
           <Link to="/supplements" className="text-sm text-sky-600 hover:underline">Supplements</Link>
           <button className="btn" onClick={onSync} disabled={!isOnline}>Sync</button>
           <button className="btn" onClick={onToggleDark} aria-pressed={dark}>{dark ? '🌙' : '☀️'}</button>
