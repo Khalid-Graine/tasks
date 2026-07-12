@@ -275,7 +275,7 @@ function App() {
     <Router>
       <Header onToggle={() => setDrawerOpen(d => !d)} open={drawerOpen} onSync={handleSync} isOnline={isOnline} onToggleDark={() => setDark(d => !d)} dark={dark} />
       <SideDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
-      <main>
+      <main className="pt-14">
         <Routes>
           <Route path="/" element={<TasksPage />} />
           <Route path="/supplements" element={<Supplements />} />

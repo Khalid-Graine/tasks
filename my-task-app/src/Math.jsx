@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 const PHASES = [
   {
     name: 'Phase 1 — Warm up',
-    when: 'April–May',
+    when: 'Done ✓',
     topics: [
       'Order of operations (PEMDAS)',
       'Fractions: add, take away, times, divide',
@@ -16,7 +16,7 @@ const PHASES = [
   },
   {
     name: 'Phase 2 — QAS topics',
-    when: 'May–June',
+    when: 'July 12 – July 26',
     topics: [
       'Solve for x',
       'Graph y = mx + b',
@@ -29,7 +29,7 @@ const PHASES = [
   },
   {
     name: 'Phase 3 — Big algebra',
-    when: 'June–July',
+    when: 'July 27 – August 12',
     topics: [
       'Function notation f(x)',
       'Factoring',
@@ -43,7 +43,7 @@ const PHASES = [
   },
   {
     name: 'Phase 4 — Harder topics',
-    when: 'July',
+    when: 'August 13 – August 23',
     topics: [
       'Rational equations',
       'Radical equations',
@@ -56,7 +56,7 @@ const PHASES = [
   },
   {
     name: 'Phase 5 — Test prep',
-    when: 'August',
+    when: 'August 24 – August 29',
     topics: [
       'Practice test: Arithmetic + QAS',
       'Practice test: Advanced Algebra',
