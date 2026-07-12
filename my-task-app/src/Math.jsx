@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 
 const PHASES = [
@@ -17,6 +17,8 @@ const PHASES = [
   {
     name: 'Phase 2 — QAS topics',
     when: 'July 12 – July 26',
+    start: '2026-07-12',
+    end: '2026-07-26',
     topics: [
       'Solve for x',
       'Graph y = mx + b',
@@ -30,6 +32,8 @@ const PHASES = [
   {
     name: 'Phase 3 — Big algebra',
     when: 'July 27 – August 12',
+    start: '2026-07-27',
+    end: '2026-08-12',
     topics: [
       'Function notation f(x)',
       'Factoring',
@@ -44,6 +48,8 @@ const PHASES = [
   {
     name: 'Phase 4 — Harder topics',
     when: 'August 13 – August 23',
+    start: '2026-08-13',
+    end: '2026-08-23',
     topics: [
       'Rational equations',
       'Radical equations',
@@ -57,6 +63,8 @@ const PHASES = [
   {
     name: 'Phase 5 — Test prep',
     when: 'August 24 – August 29',
+    start: '2026-08-24',
+    end: '2026-08-29',
     topics: [
       'Practice test: Arithmetic + QAS',
       'Practice test: Advanced Algebra',
@@ -85,6 +93,23 @@ export default function MathPage() {
     setLoaded(true);
   }, []);
 
+  const rewardTimeout = useRef(null);
+  const [lastRewardedPhase, setLastRewardedPhase] = useState(null);
+
+  useEffect(() => {
+    return () => {
+      if (rewardTimeout.current) {
+        clearTimeout(rewardTimeout.current);
+      }
+    };
+  }, []);
+
+  const showReward = (phaseName) => {
+    setLastRewardedPhase(phaseName);
+    if (rewardTimeout.current) clearTimeout(rewardTimeout.current);
+    rewardTimeout.current = setTimeout(() => setLastRewardedPhase(null), 1200);
+  };
+
   const save = (nextSet) => {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify([...nextSet]));
@@ -95,10 +120,21 @@ export default function MathPage() {
 
   const toggle = (topic) => {
     const next = new Set(done);
+    const adding = !next.has(topic);
     if (next.has(topic)) next.delete(topic);
     else next.add(topic);
     setDone(next);
     save(next);
+
+    if (adding) {
+      const phase = PHASES.find((p) => p.topics.includes(topic));
+      if (phase) {
+        const completed = phase.topics.filter((t) => next.has(t)).length;
+        if (completed === phase.topics.length) {
+          showReward(phase.name);
+        }
+      }
+    }
   };
 
   const reset = () => {
@@ -110,13 +146,30 @@ export default function MathPage() {
   const count = [...done].filter((topic) => ALL.includes(topic)).length;
   const pct = Math.round((count / TOTAL) * 100);
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const oneDay = 1000 * 60 * 60 * 24;
+  const getDaysLeftText = (phase) => {
+    if (!phase.start || !phase.end) return null;
+    const start = new Date(`${phase.start}T00:00:00`);
+    const end = new Date(`${phase.end}T00:00:00`);
+    if (today < start || today > end) return null;
+    const diff = Math.round((end - today) / oneDay) + 1;
+    if (diff <= 0) return null;
+    return diff === 1 ? '1 day left' : `${diff} days left`;
+  };
+
   const ink = '#1f2233';
   const green = '#2ea36b';
   const soft = '#eef0f7';
 
   return (
     <div style={{ minHeight: '100%', background: '#f7f8fc', color: ink, padding: '22px 16px 40px', maxWidth: 640, margin: '0 auto' }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap'); html, body { font-family: 'Nunito', ui-rounded, system-ui, sans-serif; }`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap'); html, body { font-family: 'Nunito', ui-rounded, system-ui, sans-serif; }
+        @keyframes burstA { 0% { opacity: 1; transform: translate(0,0) scale(1); } 100% { opacity: 0; transform: translate(-14px,-24px) scale(0.4); } }
+        @keyframes burstB { 0% { opacity: 1; transform: translate(0,0) scale(1); } 100% { opacity: 0; transform: translate(14px,-18px) scale(0.4); } }
+        @keyframes burstC { 0% { opacity: 1; transform: translate(0,0) scale(1); } 100% { opacity: 0; transform: translate(0,-28px) scale(0.4); } }
+      `}</style>
 
       <div style={{ background: '#fff', borderRadius: 22, padding: '26px 22px', boxShadow: '0 8px 24px rgba(31,34,51,0.06)', textAlign: 'center', marginBottom: 22 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: '#8b90a6', letterSpacing: 0.4 }}>YOU HAVE DONE</div>
@@ -131,13 +184,28 @@ export default function MathPage() {
 
       {PHASES.map((phase) => {
         const phaseDone = phase.topics.filter((topic) => done.has(topic)).length;
+        const phaseComplete = phaseDone === phase.topics.length;
         return (
-          <div key={phase.name} style={{ marginBottom: 20 }}>
+          <div key={phase.name} style={{ marginBottom: 20, position: 'relative', borderRadius: phaseComplete ? 20 : 0, background: phaseComplete ? '#ebfaf0' : 'transparent', padding: phaseComplete ? '10px' : 0, transition: 'background-color 0.3s ease' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, padding: '0 4px' }}>
               <div style={{ fontSize: 17, fontWeight: 900 }}>{phase.name}</div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#8b90a6' }}>{phaseDone}/{phase.topics.length} · {phase.when}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#8b90a6' }}>{phaseDone}/{phase.topics.length} · {phase.when}</div>
+                {getDaysLeftText(phase) ? (
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#166534', background: '#dcfce7', borderRadius: 9999, padding: '4px 8px' }}>
+                    {getDaysLeftText(phase)}
+                  </div>
+                ) : null}
+              </div>
             </div>
-            <div style={{ background: '#fff', borderRadius: 16, overflow: 'hidden', boxShadow: '0 4px 14px rgba(31,34,51,0.05)' }}>
+            {phaseComplete && lastRewardedPhase === phase.name ? (
+              <div style={{ position: 'absolute', top: 10, right: 16, display: 'flex', gap: 6, pointerEvents: 'none' }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#2ea36b', animation: 'burstA 1s ease-out forwards' }} />
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#34d399', animation: 'burstB 1s ease-out forwards' }} />
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#bbf7d0', animation: 'burstC 1s ease-out forwards' }} />
+              </div>
+            ) : null}
+            <div style={{ background: '#fff', borderRadius: 16, overflow: 'hidden', boxShadow: '0 4px 14px rgba(31,34,51,0.05)', border: phaseComplete ? '1px solid rgba(46,163,107,0.18)' : 'none' }}>
               {phase.topics.map((topic, index) => {
                 const isDone = done.has(topic);
                 return (
