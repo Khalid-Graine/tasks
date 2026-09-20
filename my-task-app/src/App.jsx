@@ -6,6 +6,7 @@ import { db } from './firebase';
 import Supplements from './Supplements';
 import MathPage from './Math';
 import TrackingPage from './Tracking';
+import Dashboard from './Dashboard';
 import { collection, addDoc, onSnapshot, query, updateDoc, doc, deleteDoc } from "firebase/firestore";
 
 function TasksPage() {
@@ -282,6 +283,7 @@ function App() {
           <Route path="/supplements" element={<Supplements />} />
           <Route path="/math" element={<MathPage />} />
           <Route path="/tracking" element={<TrackingPage />} />
+          <Route path="/dashboard" element={<Dashboard />} />
         </Routes>
       </main>
     </Router>

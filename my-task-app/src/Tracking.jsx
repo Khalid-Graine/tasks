@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 const STORAGE_KEY = 'custom-tracking-v1';
 
@@ -18,10 +19,18 @@ const getLevelMeta = (levelKey) => LEVELS.find((level) => level.key === levelKey
 
 const getDefaultItems = () => [{ id: makeId(), name: 'Procrastination' }];
 
+const getThreeMonthsAgo = () => {
+  const date = new Date();
+  date.setMonth(date.getMonth() - 3);
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
 export default function TrackingPage() {
   const [items, setItems] = useState([]);
   const [logs, setLogs] = useState({});
   const [newItemName, setNewItemName] = useState('');
+  const [selectedDate, setSelectedDate] = useState(getTodayKey());
 
   useEffect(() => {
     try {
@@ -54,18 +63,40 @@ export default function TrackingPage() {
   }, [items, logs]);
 
   const todayKey = getTodayKey();
+  const isToday = selectedDate === todayKey;
 
-  const todaySummary = useMemo(() => {
+  const displaySummary = useMemo(() => {
     return items.map((item) => {
-      const todayLevel = logs[todayKey]?.[item.id] || 'zero';
-      const levelMeta = getLevelMeta(todayLevel);
+      const selectedLevel = logs[selectedDate]?.[item.id] || 'zero';
+      const levelMeta = getLevelMeta(selectedLevel);
       return {
         ...item,
-        todayLevel,
+        selectedLevel,
         levelMeta,
       };
     });
-  }, [items, logs, todayKey]);
+  }, [items, logs, selectedDate]);
+
+  const changeDate = (daysOffset) => {
+    const date = new Date(selectedDate);
+    date.setDate(date.getDate() + daysOffset);
+    const newDate = date.toISOString().slice(0, 10);
+    
+    const threeMonthsAgo = getThreeMonthsAgo().toISOString().slice(0, 10);
+    if (newDate >= threeMonthsAgo && newDate <= todayKey) {
+      setSelectedDate(newDate);
+    }
+  };
+
+  const canGoBack = () => {
+    const date = new Date(selectedDate);
+    date.setDate(date.getDate() - 1);
+    const prevDate = date.toISOString().slice(0, 10);
+    const threeMonthsAgo = getThreeMonthsAgo().toISOString().slice(0, 10);
+    return prevDate >= threeMonthsAgo;
+  };
+
+  const canGoForward = () => selectedDate < todayKey;
 
   const addItem = (event) => {
     event.preventDefault();
@@ -98,11 +129,11 @@ export default function TrackingPage() {
     });
   };
 
-  const setTodayLevel = (itemId, levelKey) => {
+  const setLevel = (itemId, levelKey) => {
     setLogs((prev) => ({
       ...prev,
-      [todayKey]: {
-        ...(prev[todayKey] || {}),
+      [selectedDate]: {
+        ...(prev[selectedDate] || {}),
         [itemId]: levelKey,
       },
     }));
@@ -130,9 +161,64 @@ export default function TrackingPage() {
   return (
     <div className="min-h-screen bg-slate-100 px-4 pb-10 pt-6 text-slate-800 dark:bg-slate-950 dark:text-slate-100">
       <div className="mx-auto max-w-4xl">
-        <div className="mb-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-600">Daily check-in</p>
-          <h1 className="mt-2 text-3xl font-bold">Track what matters</h1>
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-600">Daily check-in</p>
+            <h1 className="mt-2 text-3xl font-bold">Track what matters</h1>
+          </div>
+          <Link
+            to="/dashboard"
+            className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-600"
+          >
+            📊 Dashboard
+          </Link>
+        </div>
+
+        {/* Date Navigation */}
+        <div className="mb-6 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => changeDate(-1)}
+              disabled={!canGoBack()}
+              className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium transition disabled:opacity-30 disabled:cursor-not-allowed hover:enabled:border-sky-300 dark:border-slate-700 dark:bg-slate-800"
+            >
+              ← Previous
+            </button>
+            <div className="text-center">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Selected date</p>
+              <p className="mt-1 text-lg font-bold">
+                {new Date(selectedDate + 'T00:00:00').toLocaleDateString(undefined, { 
+                  weekday: 'short', 
+                  month: 'short', 
+                  day: 'numeric' 
+                })}
+                {isToday && <span className="ml-2 text-xs text-sky-600 font-semibold">(Today)</span>}
+              </p>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => {
+                  const newDate = e.target.value;
+                  const threeMonthsAgo = getThreeMonthsAgo().toISOString().slice(0, 10);
+                  if (newDate >= threeMonthsAgo && newDate <= todayKey) {
+                    setSelectedDate(newDate);
+                  }
+                }}
+                min={getThreeMonthsAgo().toISOString().slice(0, 10)}
+                max={todayKey}
+                className="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-sm outline-none focus:border-sky-400 dark:border-slate-700 dark:bg-slate-800"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => changeDate(1)}
+              disabled={!canGoForward()}
+              className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium transition disabled:opacity-30 disabled:cursor-not-allowed hover:enabled:border-sky-300 dark:border-slate-700 dark:bg-slate-800"
+            >
+              Next →
+            </button>
+          </div>
         </div>
 
         <form onSubmit={addItem} className="mb-6 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -152,7 +238,7 @@ export default function TrackingPage() {
         </form>
 
         <div className="grid gap-4">
-          {todaySummary.map((item) => {
+          {displaySummary.map((item) => {
             const history = getHistory(item.id);
             const maxScore = LEVELS[LEVELS.length - 1].score;
 
@@ -173,7 +259,7 @@ export default function TrackingPage() {
                 </div>
 
                 <div className="mb-4 rounded-2xl bg-slate-50 p-3 dark:bg-slate-800">
-                  <p className="text-sm text-slate-500 dark:text-slate-400">Today’s level</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">{isToday ? "Today's level" : "Level for selected date"}</p>
                   <div className="mt-2 flex items-center gap-3">
                     <span className={`inline-block h-3 w-3 rounded-full ${item.levelMeta.color}`} />
                     <span className="text-lg font-bold capitalize">{item.levelMeta.label}</span>
@@ -182,12 +268,12 @@ export default function TrackingPage() {
 
                 <div className="flex flex-wrap gap-2">
                   {LEVELS.map((level) => {
-                    const selected = item.todayLevel === level.key;
+                    const selected = item.selectedLevel === level.key;
                     return (
                       <button
                         key={level.key}
                         type="button"
-                        onClick={() => setTodayLevel(item.id, level.key)}
+                        onClick={() => setLevel(item.id, level.key)}
                         className={`rounded-full border px-3 py-2 text-sm font-medium transition ${
                           selected
                             ? 'border-sky-500 bg-sky-500 text-white shadow-sm'
@@ -203,7 +289,7 @@ export default function TrackingPage() {
                 <div className="mt-6">
                   <div className="mb-2 flex items-center justify-between text-xs font-medium uppercase tracking-[0.15em] text-slate-500 dark:text-slate-400">
                     <span>Last 7 days</span>
-                    <span>{item.todayLevel}</span>
+                    <span>{item.selectedLevel}</span>
                   </div>
 
                   <div className="flex h-24 items-end gap-2">

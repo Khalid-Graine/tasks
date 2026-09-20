@@ -14,6 +14,7 @@ export default function Header({ onToggle, open, onSync, isOnline, onToggleDark,
           <Link to="/math" className="text-sm text-sky-600 hover:underline">Math</Link>
           <Link to="/supplements" className="text-sm text-sky-600 hover:underline">Supplements</Link>
           <Link to="/tracking" className="text-sm text-sky-600 hover:underline">Tracking</Link>
+          <Link to="/dashboard" className="text-sm text-sky-600 hover:underline">Dashboard</Link>
           <button className="btn" onClick={onSync} disabled={!isOnline}>Sync</button>
           <button className="btn" onClick={onToggleDark} aria-pressed={dark}>{dark ? '🌙' : '☀️'}</button>
         </nav>
