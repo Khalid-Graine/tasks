@@ -23,6 +23,23 @@ const getLast90Days = () => {
   return days;
 };
 
+const calculateTrendMetrics = (chartData) => {
+  const totalDays = chartData.length;
+  const midpoint = Math.floor(totalDays / 2);
+  
+  const firstHalf = chartData.slice(0, midpoint).map(d => LEVELS.find(l => l.key === d.level).score);
+  const secondHalf = chartData.slice(midpoint).map(d => LEVELS.find(l => l.key === d.level).score);
+  
+  const avgFirstHalf = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+  const avgSecondHalf = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+  
+  const change = avgSecondHalf - avgFirstHalf;
+  const percentChange = ((change / avgFirstHalf) * 100).toFixed(1);
+  const trend = change > 0.1 ? 'worsening' : change < -0.1 ? 'improving' : 'stable';
+  
+  return { avgFirstHalf, avgSecondHalf, change, percentChange, trend };
+};
+
 export default function Dashboard() {
   const [items, setItems] = useState([]);
   const [logs, setLogs] = useState({});
@@ -64,16 +81,19 @@ export default function Dashboard() {
     level: logs[date]?.[selectedItem] || 'zero',
   }));
 
-  const maxScore = LEVELS[LEVELS.length - 1].score;
-  const chartHeight = 300;
-  const chartWidth = Math.max(1200, last90Days.length * 6);
+  const trendMetrics = calculateTrendMetrics(chartData);
 
-  // Generate SVG line chart
+  const maxScore = LEVELS[LEVELS.length - 1].score;
+  const chartHeight = 400;
+  const dayWidth = 12; // Width for each day
+  const chartWidth = last90Days.length * dayWidth + 100;
+
+  // Generate SVG line chart with better day labels
   const points = chartData
     .map((data, index) => {
       const levelMeta = getLevelMeta(data.level);
-      const x = (index / (last90Days.length - 1)) * (chartWidth - 60) + 30;
-      const y = chartHeight - (levelMeta.score / maxScore) * (chartHeight - 60) + 30;
+      const x = 50 + index * dayWidth;
+      const y = chartHeight - (levelMeta.score / maxScore) * (chartHeight - 80) + 40;
       return `${x},${y}`;
     })
     .join(' ');
@@ -81,32 +101,46 @@ export default function Dashboard() {
   const dotElements = chartData
     .map((data, index) => {
       const levelMeta = getLevelMeta(data.level);
-      const x = (index / (last90Days.length - 1)) * (chartWidth - 60) + 30;
-      const y = chartHeight - (levelMeta.score / maxScore) * (chartHeight - 60) + 30;
+      const x = 50 + index * dayWidth;
+      const y = chartHeight - (levelMeta.score / maxScore) * (chartHeight - 80) + 40;
+      const dateObj = new Date(data.date + 'T00:00:00');
+      const dayLabel = dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      
       return (
-        <circle
-          key={`dot-${index}`}
-          cx={x}
-          cy={y}
-          r="4"
-          fill={levelMeta.color}
-          stroke="white"
-          strokeWidth="2"
-        />
-      );
-    });
-
-  const labelElements = chartData
-    .filter((_, index) => index % Math.ceil(last90Days.length / 15) === 0)
-    .map((data, index) => {
-      const actualIndex = index * Math.ceil(last90Days.length / 15);
-      const x = (actualIndex / (last90Days.length - 1)) * (chartWidth - 60) + 30;
-      const date = new Date(data.date);
-      const label = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      return (
-        <text key={`label-${index}`} x={x} y={chartHeight + 20} textAnchor="middle" fontSize="12" fill="currentColor">
-          {label}
-        </text>
+        <g key={`day-${index}`}>
+          {/* Vertical gridline for each day */}
+          <line
+            x1={x}
+            y1="40"
+            x2={x}
+            y2={chartHeight + 10}
+            stroke="currentColor"
+            strokeWidth="0.5"
+            opacity="0.1"
+          />
+          
+          {/* Dot */}
+          <circle
+            cx={x}
+            cy={y}
+            r="5"
+            fill={levelMeta.color}
+            stroke="white"
+            strokeWidth="2"
+          />
+          
+          {/* Day label */}
+          <text
+            x={x}
+            y={chartHeight + 30}
+            textAnchor="middle"
+            fontSize="11"
+            fill="currentColor"
+            opacity="0.7"
+          >
+            {dayLabel}
+          </text>
+        </g>
       );
     });
 
@@ -141,6 +175,54 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Trend Summary */}
+        <div className="mb-6 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500 dark:text-slate-400">Overall Trend</p>
+            <div className="mt-2 flex items-center gap-2">
+              {trendMetrics.trend === 'improving' && (
+                <>
+                  <span className="text-2xl">📉</span>
+                  <div>
+                    <p className="text-lg font-bold text-green-600">Improving</p>
+                    <p className="text-xs text-green-600">{Math.abs(trendMetrics.percentChange)}% better</p>
+                  </div>
+                </>
+              )}
+              {trendMetrics.trend === 'worsening' && (
+                <>
+                  <span className="text-2xl">📈</span>
+                  <div>
+                    <p className="text-lg font-bold text-red-600">Worsening</p>
+                    <p className="text-xs text-red-600">{trendMetrics.percentChange}% worse</p>
+                  </div>
+                </>
+              )}
+              {trendMetrics.trend === 'stable' && (
+                <>
+                  <span className="text-2xl">➡️</span>
+                  <div>
+                    <p className="text-lg font-bold text-slate-600 dark:text-slate-300">Stable</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">No significant change</p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500 dark:text-slate-400">First 45 Days Avg</p>
+            <p className="mt-2 text-3xl font-bold">{trendMetrics.avgFirstHalf.toFixed(1)}</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400">severity level</p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500 dark:text-slate-400">Last 45 Days Avg</p>
+            <p className="mt-2 text-3xl font-bold">{trendMetrics.avgSecondHalf.toFixed(1)}</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400">severity level</p>
+          </div>
+        </div>
+
         {/* Chart Card */}
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-4">
@@ -172,47 +254,59 @@ export default function Dashboard() {
           <div className="overflow-x-auto rounded-lg bg-slate-50 p-4 dark:bg-slate-800">
             <svg
               width={chartWidth}
-              height={chartHeight + 40}
+              height={chartHeight + 60}
               className="text-slate-600 dark:text-slate-300"
               style={{ minWidth: '100%' }}
             >
-              {/* Grid lines */}
+              {/* Y-axis labels and gridlines */}
               {[0, 1, 2, 3, 4].map((i) => {
-                const y = chartHeight - (i / maxScore) * (chartHeight - 60) + 30;
+                const y = chartHeight - (i / maxScore) * (chartHeight - 80) + 40;
+                const levelLabel = LEVELS[i]?.label || i;
                 return (
                   <g key={`grid-${i}`}>
                     <line
-                      x1="30"
+                      x1="35"
                       y1={y}
-                      x2={chartWidth - 30}
+                      x2={chartWidth - 20}
                       y2={y}
                       stroke="currentColor"
                       strokeWidth="1"
                       strokeDasharray="4,4"
                       opacity="0.2"
                     />
-                    <text x="10" y={y + 4} fontSize="11" textAnchor="end" opacity="0.6">
-                      {i}
+                    <text x="20" y={y + 4} fontSize="12" textAnchor="end" opacity="0.6" fontWeight="500">
+                      {levelLabel}
                     </text>
                   </g>
                 );
               })}
+
+              {/* Area under line (gradient effect) */}
+              <defs>
+                <linearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.2" />
+                  <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+
+              {/* Fill area under line */}
+              <polygon
+                points={`50,${chartHeight + 40} ${points} ${50 + (last90Days.length - 1) * dayWidth},${chartHeight + 40}`}
+                fill="url(#areaGradient)"
+              />
 
               {/* Line */}
               <polyline
                 points={points}
                 fill="none"
                 stroke="#0ea5e9"
-                strokeWidth="2"
+                strokeWidth="3"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
 
-              {/* Dots */}
+              {/* Days and dots */}
               {dotElements}
-
-              {/* Labels */}
-              {labelElements}
             </svg>
           </div>
 
