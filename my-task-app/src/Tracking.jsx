@@ -26,6 +26,29 @@ const getThreeMonthsAgo = () => {
   return date;
 };
 
+const generateTestData = (itemId) => {
+  const testLogs = {};
+  const testLevels = ['zero', 'light', 'medium', 'large', 'extreme'];
+  
+  // Add 20 days of test data
+  for (let i = 19; i >= 0; i--) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const dateKey = date.toISOString().slice(0, 10);
+    
+    // Create a pattern: gradually increasing then decreasing
+    const pattern = i < 10 
+      ? testLevels[Math.floor(i / 2)] // First 10 days: 0,0,1,1,2,2,3,3,4,4
+      : testLevels[Math.floor((19 - i) / 2)]; // Last 10 days: 4,4,3,3,2,2,1,1,0,0
+    
+    testLogs[dateKey] = {
+      [itemId]: pattern
+    };
+  }
+  
+  return testLogs;
+};
+
 export default function TrackingPage() {
   const [items, setItems] = useState([]);
   const [logs, setLogs] = useState({});
@@ -45,12 +68,15 @@ export default function TrackingPage() {
       }
       const defaults = getDefaultItems();
       setItems(defaults);
-      setLogs({});
+      // Generate test data for demonstration
+      const testData = generateTestData(defaults[0].id);
+      setLogs(testData);
     } catch (error) {
       console.warn('Could not load tracking data', error);
       const defaults = getDefaultItems();
       setItems(defaults);
-      setLogs({});
+      const testData = generateTestData(defaults[0].id);
+      setLogs(testData);
     }
   }, []);
 
