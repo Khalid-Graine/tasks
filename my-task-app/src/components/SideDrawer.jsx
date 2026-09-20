@@ -14,6 +14,7 @@ export default function SideDrawer({ open, onClose }) {
           <Link to="/" onClick={onClose} className="block px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800">Home</Link>
           <Link to="/math" onClick={onClose} className="block px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800">Math</Link>
           <Link to="/supplements" onClick={onClose} className="block px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800">Supplements</Link>
+          <Link to="/tracking" onClick={onClose} className="block px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800">Tracking</Link>
         </nav>
       </aside>
     </>

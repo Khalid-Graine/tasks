@@ -5,6 +5,7 @@ import SideDrawer from './components/SideDrawer';
 import { db } from './firebase';
 import Supplements from './Supplements';
 import MathPage from './Math';
+import TrackingPage from './Tracking';
 import { collection, addDoc, onSnapshot, query, updateDoc, doc, deleteDoc } from "firebase/firestore";
 
 function TasksPage() {
@@ -280,6 +281,7 @@ function App() {
           <Route path="/" element={<TasksPage />} />
           <Route path="/supplements" element={<Supplements />} />
           <Route path="/math" element={<MathPage />} />
+          <Route path="/tracking" element={<TrackingPage />} />
         </Routes>
       </main>
     </Router>
