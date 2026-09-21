@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { db } from './firebase';
 import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
 import SyncStatus from './components/SyncStatus';
@@ -7,73 +8,365 @@ import { reportListenerError, reportSnapshot, trackWrite } from './sync';
 const ITEMS_COLLECTION = 'trackingItems';
 const LOGS_COLLECTION = 'trackingLogs';
 const SETTINGS_DOC = doc(db, 'settings', 'dashboard');
-const RANGES = [7, 15, 30, 90];
 
-const LEVELS = [
-  { key: 'zero', label: 'Zero', score: 0, color: '#10b981' },
-  { key: 'light', label: 'Light', score: 1, color: '#eab308' },
-  { key: 'medium', label: 'Medium', score: 2, color: '#f97316' },
-  { key: 'large', label: 'Large', score: 3, color: '#ef4444' },
-  { key: 'extreme', label: 'Extreme', score: 4, color: '#be185d' },
+const RANGES = [
+  { days: 7, label: '7 days' },
+  { days: 15, label: '15 days' },
+  { days: 30, label: '1 month' },
 ];
 
-const getLastNDays = (n) => {
+const VIEWS = [
+  { key: 'smoothed', label: 'Smoothed' },
+  { key: 'daily', label: 'Daily' },
+];
+
+const LEVELS = [
+  { key: 'zero', label: 'Zero', score: 0 },
+  { key: 'light', label: 'Light', score: 1 },
+  { key: 'medium', label: 'Medium', score: 2 },
+  { key: 'large', label: 'Large', score: 3 },
+  { key: 'extreme', label: 'Extreme', score: 4 },
+];
+
+const SCORE_BY_KEY = Object.fromEntries(LEVELS.map((level) => [level.key, level.score]));
+const MAX_SCORE = LEVELS.length - 1;
+const SMOOTHING_WINDOW = 3;
+const STEADY_THRESHOLD = 0.2;
+const SERIES_SLOTS = 8;
+
+const CHART_HEIGHT = 320;
+const END_LABEL_MIN_GAP = 14;
+
+// Color follows the item's position in the full list, so hiding a line never repaints the others.
+const seriesColor = (index) =>
+  index < SERIES_SLOTS ? `var(--series-${index + 1})` : 'var(--series-other)';
+
+// Tracking keys days by UTC date (toISOString), so count back from that same key.
+const getLastNDays = (n, offset = 0) => {
+  const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
   const days = [];
-  for (let i = n - 1; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    date.setHours(0, 0, 0, 0);
+  for (let i = n - 1 + offset; i >= offset; i--) {
+    const date = new Date(today);
+    date.setUTCDate(date.getUTCDate() - i);
     days.push(date.toISOString().slice(0, 10));
   }
   return days;
 };
 
-const calculateTrendMetrics = (chartData) => {
-  const totalDays = chartData.length;
-  const midpoint = Math.floor(totalDays / 2);
-  
-  const firstHalf = chartData.slice(0, midpoint).map(d => LEVELS.find(l => l.key === d.level).score);
-  const secondHalf = chartData.slice(midpoint).map(d => LEVELS.find(l => l.key === d.level).score);
-  
-  const avgFirstHalf = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-  const avgSecondHalf = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
-  
-  const change = avgSecondHalf - avgFirstHalf;
-  
-  let trend, percentChange, trendLabel;
-  
-  if (avgFirstHalf === 0) {
-    if (avgSecondHalf > 0) {
-      trend = 'worsening';
-      trendLabel = 'Worse';
-      percentChange = '';
-    } else {
-      trend = 'stable';
-      trendLabel = 'No change';
-      percentChange = '';
-    }
-  } else {
-    percentChange = ((change / avgFirstHalf) * 100).toFixed(1);
-    trend = change > 0.1 ? 'worsening' : change < -0.1 ? 'improving' : 'stable';
-    trendLabel = trend === 'improving' ? `${Math.abs(percentChange)}% better` : 
-                 trend === 'worsening' ? `${percentChange}% worse` : 'No significant change';
-  }
-  
-  return { avgFirstHalf, avgSecondHalf, change, percentChange, trend, trendLabel };
+const formatDay = (dayKey, options) =>
+  new Date(`${dayKey}T00:00:00Z`).toLocaleDateString(undefined, { timeZone: 'UTC', ...options });
+
+const average = (values) => {
+  const logged = values.filter((value) => value != null);
+  return logged.length ? logged.reduce((sum, value) => sum + value, 0) / logged.length : null;
 };
+
+const scoresFor = (logs, days, itemId) => days.map((day) => SCORE_BY_KEY[logs[day]?.[itemId]] ?? null);
+
+const levelNear = (score) => LEVELS[Math.round(score)].label;
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const truncate = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+// Consecutive runs of logged days; an unlogged day breaks the line instead of pretending to be Zero.
+const runsOf = (values) => {
+  const runs = [];
+  let run = [];
+  values.forEach((value, index) => {
+    if (value == null) {
+      if (run.length) runs.push(run);
+      run = [];
+    } else {
+      run.push(index);
+    }
+  });
+  if (run.length) runs.push(run);
+  return runs;
+};
+
+const describeChange = (series, rangeLabel) => {
+  if (series.avg == null) return 'Nothing logged in this period';
+  if (series.prevAvg == null) return `No data for the previous ${rangeLabel}`;
+  const change = series.avg - series.prevAvg;
+  if (Math.abs(change) < STEADY_THRESHOLD) return `→ Steady vs previous ${rangeLabel}`;
+  const direction = change > 0 ? '▲ Up' : '▼ Down';
+  return `${direction} ${Math.abs(change).toFixed(1)} vs previous ${rangeLabel}`;
+};
+
+function SegmentedControl({ label, options, value, onChange }) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+            value === option.value
+              ? 'bg-sky-500 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LineKey({ color, muted = false }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block h-0.5 w-4 shrink-0 rounded-full ${muted ? 'opacity-30' : ''}`}
+      style={{ backgroundColor: color }}
+    />
+  );
+}
+
+function TrendChart({ days, series, view }) {
+  const wrapRef = useRef(null);
+  const svgRef = useRef(null);
+  const [width, setWidth] = useState(640);
+  const [active, setActive] = useState(null);
+
+  useEffect(() => {
+    const element = wrapRef.current;
+    if (!element) return undefined;
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const showEndLabels = width >= 520;
+  const margin = { top: 12, right: showEndLabels ? 112 : 16, bottom: 32, left: 60 };
+  const plotWidth = Math.max(width - margin.left - margin.right, 10);
+  const plotHeight = CHART_HEIGHT - margin.top - margin.bottom;
+  const lastIndex = days.length - 1;
+
+  const x = (index) => margin.left + (lastIndex === 0 ? plotWidth / 2 : (index / lastIndex) * plotWidth);
+  const y = (score) => margin.top + plotHeight - (score / MAX_SCORE) * plotHeight;
+
+  const maxTicks = Math.max(2, Math.floor(plotWidth / 64));
+  const tickStep = Math.ceil(days.length / maxTicks);
+  const tickIndexes = days.map((_, index) => index).filter((index) => (lastIndex - index) % tickStep === 0);
+
+  // Each line ends on its latest logged value; labels that would collide fall back to the legend.
+  const endPoints = series
+    .map((line) => {
+      const index = line.values.findLastIndex((value) => value != null);
+      return index < 0 ? null : { line, index, y: y(line.values[index]) };
+    })
+    .filter(Boolean);
+
+  const endLabels = [];
+  if (showEndLabels) {
+    [...endPoints]
+      .sort((a, b) => a.y - b.y)
+      .forEach((point) => {
+        const previous = endLabels[endLabels.length - 1];
+        if (!previous || point.y - previous.y >= END_LABEL_MIN_GAP) endLabels.push(point);
+      });
+  }
+
+  const indexAt = (clientX) => {
+    const rect = svgRef.current.getBoundingClientRect();
+    return clamp(Math.round(((clientX - rect.left - margin.left) / plotWidth) * lastIndex), 0, lastIndex);
+  };
+
+  const handleKeyDown = (event) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (step) {
+      event.preventDefault();
+      setActive((current) => clamp((current ?? lastIndex) + step, 0, lastIndex));
+    } else if (event.key === 'Escape') {
+      setActive(null);
+    }
+  };
+
+  const readout =
+    active == null
+      ? []
+      : series
+          .map((line) => ({ line, value: line.values[active] }))
+          .sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
+
+  const tooltipOnLeft = active != null && x(active) > width / 2;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <svg
+        ref={svgRef}
+        width={width}
+        height={CHART_HEIGHT}
+        viewBox={`0 0 ${width} ${CHART_HEIGHT}`}
+        role="group"
+        aria-label={`Trend lines for ${series.map((line) => line.name).join(', ')}. Use the left and right arrow keys to read each day.`}
+        tabIndex={0}
+        className="touch-pan-y select-none outline-none focus-visible:ring-2 focus-visible:ring-sky-400 rounded-lg"
+        onPointerMove={(event) => setActive(indexAt(event.clientX))}
+        onPointerDown={(event) => setActive(indexAt(event.clientX))}
+        onPointerLeave={() => setActive(null)}
+        onFocus={() => setActive(lastIndex)}
+        onBlur={() => setActive(null)}
+        onKeyDown={handleKeyDown}
+      >
+        {LEVELS.map((level) => (
+          <g key={level.key}>
+            <line
+              x1={margin.left}
+              x2={margin.left + plotWidth}
+              y1={y(level.score)}
+              y2={y(level.score)}
+              strokeWidth="1"
+              className={level.score === 0 ? 'stroke-slate-300 dark:stroke-slate-600' : 'stroke-slate-200 dark:stroke-slate-700'}
+            />
+            <text
+              x={margin.left - 12}
+              y={y(level.score)}
+              dy="0.35em"
+              textAnchor="end"
+              fontSize="12"
+              className="fill-slate-500 tabular-nums dark:fill-slate-400"
+            >
+              {level.label}
+            </text>
+          </g>
+        ))}
+
+        {tickIndexes.map((index) => (
+          <text
+            key={days[index]}
+            x={x(index)}
+            y={margin.top + plotHeight + 22}
+            textAnchor="middle"
+            fontSize="12"
+            className="fill-slate-500 tabular-nums dark:fill-slate-400"
+          >
+            {formatDay(days[index], { month: 'short', day: 'numeric' })}
+          </text>
+        ))}
+
+        {active != null && (
+          <line
+            x1={x(active)}
+            x2={x(active)}
+            y1={margin.top}
+            y2={margin.top + plotHeight}
+            strokeWidth="1"
+            className="stroke-slate-400 dark:stroke-slate-500"
+          />
+        )}
+
+        {series.map((line) =>
+          runsOf(line.values).map((run) =>
+            run.length === 1 ? (
+              <circle key={`${line.id}-${run[0]}`} cx={x(run[0])} cy={y(line.values[run[0]])} r="3" fill={line.color} />
+            ) : (
+              <path
+                key={`${line.id}-${run[0]}`}
+                d={run.map((index, i) => `${i ? 'L' : 'M'}${x(index)},${y(line.values[index])}`).join(' ')}
+                fill="none"
+                stroke={line.color}
+                strokeWidth="2"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            )
+          )
+        )}
+
+        {endPoints.map(({ line, index }) => (
+          <circle
+            key={`end-${line.id}`}
+            cx={x(index)}
+            cy={y(line.values[index])}
+            r="4"
+            fill={line.color}
+            stroke="var(--chart-surface)"
+            strokeWidth="2"
+          />
+        ))}
+
+        {endLabels.map(({ line, y: labelY }) => (
+          <text
+            key={`label-${line.id}`}
+            x={margin.left + plotWidth + 12}
+            y={labelY}
+            dy="0.35em"
+            fontSize="12"
+            fontWeight="500"
+            className="fill-slate-700 dark:fill-slate-200"
+          >
+            {truncate(line.name, 14)}
+          </text>
+        ))}
+
+        {active != null &&
+          readout
+            .filter(({ value }) => value != null)
+            .map(({ line, value }) => (
+              <circle
+                key={`active-${line.id}`}
+                cx={x(active)}
+                cy={y(value)}
+                r="4"
+                fill={line.color}
+                stroke="var(--chart-surface)"
+                strokeWidth="2"
+              />
+            ))}
+      </svg>
+
+      {active != null && (
+        <div
+          className="pointer-events-none absolute z-10 min-w-44 rounded-xl border border-slate-200 bg-white/95 p-3 text-sm shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-900/95"
+          style={{
+            top: margin.top,
+            left: x(active),
+            transform: tooltipOnLeft ? 'translateX(calc(-100% - 12px))' : 'translateX(12px)',
+          }}
+        >
+          <p className="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+            {formatDay(days[active], { weekday: 'short', month: 'short', day: 'numeric' })}
+          </p>
+          <ul className="space-y-1.5">
+            {readout.map(({ line, value }) => (
+              <li key={line.id} className="flex items-center gap-2">
+                <LineKey color={line.color} />
+                <span className="font-semibold tabular-nums text-slate-900 dark:text-white">
+                  {value == null ? '—' : view === 'daily' ? levelNear(value) : value.toFixed(1)}
+                </span>
+                <span className="truncate text-slate-600 dark:text-slate-300">{line.name}</span>
+                {value != null && view === 'smoothed' && (
+                  <span className="ml-auto pl-2 text-xs text-slate-500 dark:text-slate-400">≈ {levelNear(value)}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [items, setItems] = useState([]);
   const [logs, setLogs] = useState({});
-  const [selectedItem, setSelectedItem] = useState(null);
   const [range, setRange] = useState(7);
-  
+  const [view, setView] = useState('smoothed');
+  const [hidden, setHidden] = useState([]);
+
   useEffect(() => {
     const unsubSettings = onSnapshot(
       SETTINGS_DOC,
       (snap) => {
-        const stored = snap.data()?.range;
-        if (RANGES.includes(stored)) setRange(stored);
+        const settings = snap.data() ?? {};
+        if (RANGES.some((option) => option.days === settings.range)) setRange(settings.range);
+        if (VIEWS.some((option) => option.key === settings.view)) setView(settings.view);
+        if (Array.isArray(settings.hidden)) setHidden(settings.hidden);
       },
       (error) => reportListenerError('dashboard settings', error)
     );
@@ -107,252 +400,200 @@ export default function Dashboard() {
     };
   }, []);
 
-  // Written on click rather than in an effect, so a snapshot arriving from
-  // another device can't bounce straight back into another write.
-  const changeRange = (next) => {
-    setRange(next);
-    trackWrite('dashboard range', () => setDoc(SETTINGS_DOC, { range: next }, { merge: true }));
+  // Settings are written on click rather than in an effect, so a snapshot arriving
+  // from another device can't bounce straight back into another write.
+  const saveSettings = (label, patch) =>
+    trackWrite(label, () => setDoc(SETTINGS_DOC, patch, { merge: true }));
+
+  const changeRange = (days) => {
+    setRange(days);
+    saveSettings('dashboard range', { range: days });
   };
 
-  // Fall back to the first metric until one is picked, rather than syncing state in an effect.
-  const activeItemId = items.some(item => item.id === selectedItem)
-    ? selectedItem
-    : items[0]?.id ?? null;
+  const changeView = (key) => {
+    setView(key);
+    saveSettings('dashboard view', { view: key });
+  };
 
-  const chartData = (() => {
-    if (!activeItemId) return [];
-    return getLastNDays(range).map(day => ({
-      date: day,
-      level: logs[day]?.[activeItemId] || 'zero',
-    }));
-  })();
+  const toggleSeries = (id) => {
+    const next = hidden.includes(id) ? hidden.filter((hiddenId) => hiddenId !== id) : [...hidden, id];
+    setHidden(next);
+    saveSettings('dashboard lines', { hidden: next });
+  };
 
-  const metrics = calculateTrendMetrics(chartData);
+  const rangeLabel = RANGES.find((option) => option.days === range).label;
 
-  const statistics = (() => {
-    const counts = { zero: 0, light: 0, medium: 0, large: 0, extreme: 0 };
-    chartData.forEach(d => {
-      counts[d.level]++;
+  const days = useMemo(() => getLastNDays(range), [range]);
+
+  const series = useMemo(() => {
+    const smoothingDays = getLastNDays(range + SMOOTHING_WINDOW - 1);
+    const previousDays = getLastNDays(range, range);
+
+    return items.map((item, index) => {
+      const daily = scoresFor(logs, days, item.id);
+      const extended = scoresFor(logs, smoothingDays, item.id);
+      const smoothed = days.map((_, i) => average(extended.slice(i, i + SMOOTHING_WINDOW)));
+
+      return {
+        ...item,
+        color: seriesColor(index),
+        daily,
+        values: view === 'smoothed' ? smoothed : daily,
+        avg: average(daily),
+        prevAvg: average(scoresFor(logs, previousDays, item.id)),
+        logged: daily.filter((value) => value != null).length,
+        hidden: hidden.includes(item.id),
+      };
     });
-    return LEVELS.map(level => ({
-      ...level,
-      count: counts[level.key],
-      percentage: ((counts[level.key] / range) * 100).toFixed(0),
-    }));
-  })();
+  }, [items, logs, days, range, view, hidden]);
 
-  const chartHeight = 300;
-  const maxScore = Math.max(...chartData.map(d => LEVELS.find(l => l.key === d.level).score), 1);
-  
-  const getDotSize = () => range === 90 ? 3 : 5;
-  const getLabelFrequency = () => {
-    if (range <= 7) return 1;
-    if (range <= 15) return 2;
-    if (range <= 30) return 5;
-    return 15;
-  };
-
-  const labelFreq = getLabelFrequency();
-  const dotSize = getDotSize();
-  const viewBoxWidth = range * 10 + 80;
-  const viewBoxHeight = chartHeight + 60;
-
-  const pointsData = chartData.map((d, idx) => ({
-    x: 50 + idx * 10,
-    y: chartHeight - (LEVELS.find(l => l.key === d.level).score / maxScore) * (chartHeight - 20),
-    score: LEVELS.find(l => l.key === d.level).score,
-    date: d.date,
-    idx,
-  }));
-
-  const polylinePoints = pointsData.map(p => `${p.x},${p.y}`).join(' ');
+  const visible = series.filter((line) => !line.hidden);
 
   return (
-    <div className="min-h-screen bg-white dark:bg-slate-900 p-4 pt-32">
-      <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-8">Dashboard</h1>
+    <div className="min-h-screen bg-slate-100 px-4 pb-10 pt-6 text-slate-800 dark:bg-slate-950 dark:text-slate-100">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-600">Trends</p>
+            <h1 className="mt-2 text-3xl font-bold">Dashboard</h1>
+          </div>
+          <Link
+            to="/tracking"
+            className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-600"
+          >
+            ✏️ Log today
+          </Link>
+        </div>
 
         <SyncStatus />
 
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6 mb-6">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Select Item</h2>
-          <div className="flex flex-wrap gap-2">
-            {items.map(item => (
-              <button
-                key={item.id}
-                onClick={() => setSelectedItem(item.id)}
-                className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
-                  activeItemId === item.id
-                    ? 'bg-sky-500 text-white border-2 border-sky-500'
-                    : 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white border-2 border-transparent hover:border-sky-500'
-                }`}
-              >
-                {item.name}
-              </button>
-            ))}
-          </div>
-
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 mt-6">Time Range</h2>
-          <div className="flex flex-wrap gap-2">
-            {RANGES.map(r => (
-              <button
-                key={r}
-                onClick={() => changeRange(r)}
-                className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
-                  range === r
-                    ? 'bg-sky-500 text-white border-2 border-sky-500'
-                    : 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white border-2 border-transparent hover:border-sky-500'
-                }`}
-              >
-                {r === 30 ? '1 month' : r === 90 ? '3 months' : `${r} days`}
-              </button>
-            ))}
-          </div>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <SegmentedControl
+            label="Time range"
+            options={RANGES.map((option) => ({ value: option.days, label: option.label }))}
+            value={range}
+            onChange={changeRange}
+          />
+          <SegmentedControl
+            label="Line style"
+            options={VIEWS.map((option) => ({ value: option.key, label: option.label }))}
+            value={view}
+            onChange={changeView}
+          />
         </div>
 
-        {activeItemId && chartData.length > 0 && (
+        {items.length === 0 ? (
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <p className="font-medium">Nothing to chart yet.</p>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Add something to track on the{' '}
+              <Link to="/tracking" className="text-sky-600 hover:underline">Tracking page</Link>.
+            </p>
+          </div>
+        ) : (
           <>
-            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6 mb-6">
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-6">
-                Last {range} days trend analysis
-              </h2>
+            <section className="mb-6 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6 dark:border-slate-800 dark:bg-slate-800">
+              <div className="mb-4">
+                <h2 className="text-lg font-bold">Everything you track, last {rangeLabel}</h2>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  {view === 'smoothed'
+                    ? `Each point is the average of the last ${SMOOTHING_WINDOW} days, so the direction is easier to see.`
+                    : 'The level you logged each day. Gaps are days with nothing logged.'}
+                </p>
+              </div>
 
-              <div className="mb-6 overflow-hidden">
-                <svg viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`} width="100%" height="auto" className="w-full">
-                  <defs>
-                    <linearGradient id="trendGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                      <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.3" />
-                      <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0" />
-                    </linearGradient>
-                  </defs>
-
-                  {/* Y-axis gridlines */}
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <line
-                      key={`grid-${i}`}
-                      x1="65"
-                      y1={20 + (i * (chartHeight - 20)) / 4}
-                      x2={viewBoxWidth - 20}
-                      y2={20 + (i * (chartHeight - 20)) / 4}
-                      stroke="#e2e8f0"
-                      strokeDasharray="4,4"
-                      className="dark:stroke-slate-700"
-                    />
-                  ))}
-
-                  {/* Y-axis labels */}
-                  {LEVELS.map((level, idx) => (
-                    <text
-                      key={`label-${idx}`}
-                      x="10"
-                      y={chartHeight - (idx * (chartHeight - 20)) / 4 + 5}
-                      fontSize="11"
-                      fill="#64748b"
-                      className="dark:fill-slate-400"
-                      textAnchor="start"
+              {series.length >= 2 && (
+                <div className="mb-4 flex flex-wrap gap-2" aria-label="Show or hide lines">
+                  {series.map((line) => (
+                    <button
+                      key={line.id}
+                      type="button"
+                      aria-pressed={!line.hidden}
+                      onClick={() => toggleSeries(line.id)}
+                      className={`flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition ${
+                        line.hidden
+                          ? 'border-dashed border-slate-300 text-slate-400 hover:border-slate-400 dark:border-slate-600 dark:text-slate-500'
+                          : 'border-slate-200 text-slate-700 hover:border-sky-300 dark:border-slate-600 dark:text-slate-200'
+                      }`}
                     >
-                      {level.label}
-                    </text>
+                      <LineKey color={line.color} muted={line.hidden} />
+                      {line.name}
+                    </button>
                   ))}
+                </div>
+              )}
 
-                  {/* Polyline */}
-                  <polyline
-                    points={polylinePoints}
-                    fill="url(#trendGradient)"
-                    stroke="#0ea5e9"
-                    strokeWidth="2.5"
-                    vectorEffect="non-scaling-stroke"
-                  />
+              {visible.length === 0 ? (
+                <p className="py-16 text-center text-sm text-slate-500 dark:text-slate-400">
+                  All lines are hidden. Pick one above to show it.
+                </p>
+              ) : (
+                <TrendChart days={days} series={visible} view={view} />
+              )}
+            </section>
 
-                  {/* Dots and date labels */}
-                  {pointsData.map((p, idx) => (
-                    <g key={`point-${idx}`}>
-                      <circle cx={p.x} cy={p.y} r={dotSize} fill="#0ea5e9" />
-                      {idx % labelFreq === 0 && (
-                        <text
-                          x={p.x}
-                          y={chartHeight + 35}
-                          fontSize="10"
-                          fill="#64748b"
-                          className="dark:fill-slate-400"
-                          textAnchor="middle"
-                        >
-                          {p.date}
-                        </text>
+            {visible.length > 0 && (
+              <section aria-label="Trend summary" className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {visible.map((line) => (
+                  <div key={line.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+                    <div className="flex items-center gap-2">
+                      <LineKey color={line.color} />
+                      <h3 className="truncate font-semibold">{line.name}</h3>
+                    </div>
+                    <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Average level</p>
+                    <p className="mt-0.5 text-3xl font-semibold">
+                      {line.avg == null ? '—' : line.avg.toFixed(1)}
+                      {line.avg != null && (
+                        <span className="ml-2 text-sm font-normal text-slate-500 dark:text-slate-400">
+                          ≈ {levelNear(line.avg)}
+                        </span>
                       )}
-                    </g>
-                  ))}
-                </svg>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-slate-700 dark:to-slate-600 rounded-lg p-4">
-                  <div className="text-sm text-slate-600 dark:text-slate-400 font-semibold">Overall Trend</div>
-                  <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                    {metrics.trendLabel}
-                  </div>
-                </div>
-                <div className="bg-gradient-to-br from-green-50 to-green-100 dark:from-slate-700 dark:to-slate-600 rounded-lg p-4">
-                  <div className="text-sm text-slate-600 dark:text-slate-400 font-semibold">
-                    First Half Avg
-                  </div>
-                  <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                    {metrics.avgFirstHalf.toFixed(2)}
-                  </div>
-                </div>
-                <div className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-slate-700 dark:to-slate-600 rounded-lg p-4">
-                  <div className="text-sm text-slate-600 dark:text-slate-400 font-semibold">
-                    Last Half Avg
-                  </div>
-                  <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                    {metrics.avgSecondHalf.toFixed(2)}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Statistics</h2>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                {statistics.map(stat => (
-                  <div
-                    key={stat.key}
-                    className="rounded-lg p-4 text-center"
-                    style={{
-                      backgroundColor: `${stat.color}20`,
-                      borderLeft: `4px solid ${stat.color}`,
-                    }}
-                  >
-                    <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                      {stat.label}
-                    </div>
-                    <div className="text-2xl font-bold mt-2" style={{ color: stat.color }}>
-                      {stat.count}
-                    </div>
-                    <div className="text-xs text-slate-600 dark:text-slate-400 mt-1">
-                      {stat.percentage}%
-                    </div>
+                    </p>
+                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{describeChange(line, rangeLabel)}</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      {line.logged} of {range} days logged
+                    </p>
                   </div>
                 ))}
-              </div>
-            </div>
+              </section>
+            )}
 
-            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6 mt-6">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Legend</h2>
-              <div className="flex flex-wrap gap-4">
-                {LEVELS.map(level => (
-                  <div key={level.key} className="flex items-center gap-2">
-                    <div
-                      className="w-4 h-4 rounded-full"
-                      style={{ backgroundColor: level.color }}
-                    ></div>
-                    <span className="text-sm text-slate-700 dark:text-slate-300">
-                      {level.label}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {visible.length > 0 && (
+              <details className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:px-6 dark:border-slate-800 dark:bg-slate-800">
+                <summary className="cursor-pointer text-sm font-medium text-slate-600 dark:text-slate-300">
+                  View as table
+                </summary>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full text-left text-sm tabular-nums">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                        <th scope="col" className="py-2 pr-4 font-medium">Date</th>
+                        {visible.map((line) => (
+                          <th key={line.id} scope="col" className="py-2 pr-4 font-medium">{line.name}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...days].reverse().map((day) => {
+                        const index = days.indexOf(day);
+                        return (
+                          <tr key={day} className="border-b border-slate-100 last:border-0 dark:border-slate-700/60">
+                            <th scope="row" className="py-2 pr-4 font-normal text-slate-500 dark:text-slate-400">
+                              {formatDay(day, { weekday: 'short', month: 'short', day: 'numeric' })}
+                            </th>
+                            {visible.map((line) => (
+                              <td key={line.id} className="py-2 pr-4">
+                                {line.daily[index] == null ? '—' : levelNear(line.daily[index])}
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            )}
           </>
         )}
       </div>

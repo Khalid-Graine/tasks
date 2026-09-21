@@ -75,3 +75,31 @@ body {
   @apply bg-red-600 text-white hover:bg-red-700;
 }
 
+
+/* Dashboard chart colors. Validated as a set (colorblind-safe for line charts)
+   against the white card in light mode and slate-800 in dark mode; the order is
+   part of that check, so add series by extending the list, never by reordering. */
+:root {
+  --chart-surface: #ffffff;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-other: #898781;
+}
+
+.dark {
+  --chart-surface: #1e293b;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+}
