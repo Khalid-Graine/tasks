@@ -1,23 +1,35 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-const STORAGE_KEY = 'custom-tracking-v1';
+const STORAGE_KEY = 'custom-tracking-v2';
 
 const LEVELS = [
-  { key: 'zero', label: 'Zero', score: 0, color: 'bg-emerald-500' },
-  { key: 'light', label: 'Light', score: 1, color: 'bg-yellow-500' },
-  { key: 'medium', label: 'Medium', score: 2, color: 'bg-orange-500' },
-  { key: 'large', label: 'Large', score: 3, color: 'bg-red-500' },
-  { key: 'extreme', label: 'Extreme', score: 4, color: 'bg-rose-700' },
+  { key: 'zero', label: 'Zero', score: 0, color: 'bg-emerald-500', hex: '#10b981' },
+  { key: 'light', label: 'Light', score: 1, color: 'bg-yellow-500', hex: '#eab308' },
+  { key: 'medium', label: 'Medium', score: 2, color: 'bg-orange-500', hex: '#f97316' },
+  { key: 'large', label: 'Large', score: 3, color: 'bg-red-500', hex: '#ef4444' },
+  { key: 'extreme', label: 'Extreme', score: 4, color: 'bg-rose-700', hex: '#be123c' },
 ];
 
 const getTodayKey = () => new Date().toISOString().slice(0, 10);
 
 const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-const getLevelMeta = (levelKey) => LEVELS.find((level) => level.key === levelKey) || LEVELS[0];
+const getLevelMeta = (levelKey) => LEVELS.find((level) => level.key === levelKey) || null;
 
-const getDefaultItems = () => [{ id: makeId(), name: 'Procrastination' }];
+const DEMO_DAYS = 90;
+
+// Each metric gets its own shape over the window so the dashboard trends differ.
+// t runs 0 (oldest day) -> 1 (today).
+const DEMO_SHAPES = {
+  Procrastination: (t) => 3.6 - 2.9 * t,
+  Motivation: (t) => 0.7 + 2.5 * t,
+  Focus: (t) => 2 + Math.sin(t * 7) * 1.1,
+  Daydreaming: (t) => 1 + 2.3 * t,
+};
+
+const getDefaultItems = () =>
+  Object.keys(DEMO_SHAPES).map((name) => ({ id: makeId(), name }));
 
 const getThreeMonthsAgo = () => {
   const date = new Date();
@@ -26,27 +38,34 @@ const getThreeMonthsAgo = () => {
   return date;
 };
 
-const generateTestData = (itemId) => {
-  const testLogs = {};
-  const testLevels = ['zero', 'light', 'medium', 'large', 'extreme'];
-  
-  // Add 20 days of test data
-  for (let i = 19; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    const dateKey = date.toISOString().slice(0, 10);
-    
-    // Create a pattern: gradually increasing then decreasing
-    const pattern = i < 10 
-      ? testLevels[Math.floor(i / 2)] // First 10 days: 0,0,1,1,2,2,3,3,4,4
-      : testLevels[Math.floor((19 - i) / 2)]; // Last 10 days: 4,4,3,3,2,2,1,1,0,0
-    
-    testLogs[dateKey] = {
-      [itemId]: pattern
-    };
-  }
-  
-  return testLogs;
+// Deterministic jitter so a given day/metric always gets the same wobble.
+const pseudoRandom = (seed) => {
+  const x = Math.sin(seed * 127.1) * 43758.5453;
+  return x - Math.floor(x);
+};
+
+const generateTestData = (items) => {
+  const logs = {};
+
+  items.forEach((item, itemIndex) => {
+    const shape = DEMO_SHAPES[item.name];
+    if (!shape) return;
+
+    for (let i = DEMO_DAYS - 1; i >= 0; i--) {
+      const date = new Date();
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() - i);
+      const dateKey = date.toISOString().slice(0, 10);
+
+      const t = (DEMO_DAYS - 1 - i) / (DEMO_DAYS - 1);
+      const jitter = (pseudoRandom(i + itemIndex * 97) - 0.5) * 1.5;
+      const score = Math.min(LEVELS.length - 1, Math.max(0, Math.round(shape(t) + jitter)));
+
+      logs[dateKey] = { ...(logs[dateKey] || {}), [item.id]: LEVELS[score].key };
+    }
+  });
+
+  return logs;
 };
 
 export default function TrackingPage() {
@@ -69,13 +88,13 @@ export default function TrackingPage() {
       const defaults = getDefaultItems();
       setItems(defaults);
       // Generate test data for demonstration
-      const testData = generateTestData(defaults[0].id);
+      const testData = generateTestData(defaults);
       setLogs(testData);
     } catch (error) {
       console.warn('Could not load tracking data', error);
       const defaults = getDefaultItems();
       setItems(defaults);
-      const testData = generateTestData(defaults[0].id);
+      const testData = generateTestData(defaults);
       setLogs(testData);
     }
   }, []);
@@ -93,8 +112,8 @@ export default function TrackingPage() {
 
   const displaySummary = useMemo(() => {
     return items.map((item) => {
-      const selectedLevel = logs[selectedDate]?.[item.id] || 'zero';
-      const levelMeta = getLevelMeta(selectedLevel);
+      const selectedLevel = logs[selectedDate]?.[item.id] || null;
+      const levelMeta = selectedLevel ? getLevelMeta(selectedLevel) : null;
       return {
         ...item,
         selectedLevel,
@@ -163,25 +182,6 @@ export default function TrackingPage() {
         [itemId]: levelKey,
       },
     }));
-  };
-
-  const getHistory = (itemId) => {
-    return Array.from({ length: 7 }, (_, index) => {
-      const date = new Date();
-      date.setHours(0, 0, 0, 0);
-      date.setDate(date.getDate() - (6 - index));
-
-      const key = date.toISOString().slice(0, 10);
-      const levelKey = logs[key]?.[itemId] || 'zero';
-      const meta = getLevelMeta(levelKey);
-
-      return {
-        key,
-        label: date.toLocaleDateString(undefined, { weekday: 'short' }),
-        levelKey,
-        meta,
-      };
-    });
   };
 
   return (
@@ -265,34 +265,26 @@ export default function TrackingPage() {
 
         <div className="grid gap-4">
           {displaySummary.map((item) => {
-            const history = getHistory(item.id);
-            const maxScore = LEVELS[LEVELS.length - 1].score;
-
             return (
-              <div key={item.id} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Metric</p>
-                    <h2 className="text-xl font-bold">{item.name}</h2>
+              <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <h2 className="truncate text-lg font-bold">{item.name}</h2>
+                    <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium dark:bg-slate-800">
+                      <span className={`h-2 w-2 rounded-full ${item.levelMeta ? item.levelMeta.color : 'bg-slate-300 dark:bg-slate-600'}`} />
+                      {item.levelMeta ? item.levelMeta.label : 'Not set'}
+                    </span>
                   </div>
                   <button
                     type="button"
                     onClick={() => removeItem(item.id)}
-                    className="text-sm text-red-500 hover:text-red-600"
+                    className="shrink-0 text-sm text-red-500 hover:text-red-600"
                   >
                     Remove
                   </button>
                 </div>
 
-                <div className="mb-4 rounded-2xl bg-slate-50 p-3 dark:bg-slate-800">
-                  <p className="text-sm text-slate-500 dark:text-slate-400">{isToday ? "Today's level" : "Level for selected date"}</p>
-                  <div className="mt-2 flex items-center gap-3">
-                    <span className={`inline-block h-3 w-3 rounded-full ${item.levelMeta.color}`} />
-                    <span className="text-lg font-bold capitalize">{item.levelMeta.label}</span>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   {LEVELS.map((level) => {
                     const selected = item.selectedLevel === level.key;
                     return (
@@ -300,7 +292,7 @@ export default function TrackingPage() {
                         key={level.key}
                         type="button"
                         onClick={() => setLevel(item.id, level.key)}
-                        className={`rounded-full border px-3 py-2 text-sm font-medium transition ${
+                        className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
                           selected
                             ? 'border-sky-500 bg-sky-500 text-white shadow-sm'
                             : 'border-slate-200 bg-white text-slate-700 hover:border-sky-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
@@ -312,28 +304,6 @@ export default function TrackingPage() {
                   })}
                 </div>
 
-                <div className="mt-6">
-                  <div className="mb-2 flex items-center justify-between text-xs font-medium uppercase tracking-[0.15em] text-slate-500 dark:text-slate-400">
-                    <span>Last 7 days</span>
-                    <span>{item.selectedLevel}</span>
-                  </div>
-
-                  <div className="flex h-24 items-end gap-2">
-                    {history.map((day) => {
-                      const height = ((day.meta.score / maxScore) * 100) || 8;
-                      return (
-                        <div key={day.key} className="flex flex-1 flex-col items-center justify-end gap-2">
-                          <div
-                            className={`w-full rounded-t-xl ${day.meta.color}`}
-                            style={{ height: `${Math.max(12, height)}%` }}
-                            title={`${day.label}: ${day.meta.label}`}
-                          />
-                          <span className="text-[10px] text-slate-500 dark:text-slate-400">{day.label.slice(0, 3)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
               </div>
             );
           })}

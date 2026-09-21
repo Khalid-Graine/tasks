@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-const STORAGE_KEY = 'custom-tracking-v1';
+const STORAGE_KEY = 'custom-tracking-v2';
+const DASHBOARD_RANGE_KEY = 'dashboard-range';
 
 const LEVELS = [
   { key: 'zero', label: 'Zero', score: 0, color: '#10b981' },
@@ -12,9 +13,9 @@ const LEVELS = [
 
 const getLevelMeta = (levelKey) => LEVELS.find((level) => level.key === levelKey) || LEVELS[0];
 
-const getLast90Days = () => {
+const getLastNDays = (n) => {
   const days = [];
-  for (let i = 89; i >= 0; i--) {
+  for (let i = n - 1; i >= 0; i--) {
     const date = new Date();
     date.setDate(date.getDate() - i);
     date.setHours(0, 0, 0, 0);
@@ -34,295 +35,298 @@ const calculateTrendMetrics = (chartData) => {
   const avgSecondHalf = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
   
   const change = avgSecondHalf - avgFirstHalf;
-  const percentChange = ((change / avgFirstHalf) * 100).toFixed(1);
-  const trend = change > 0.1 ? 'worsening' : change < -0.1 ? 'improving' : 'stable';
   
-  return { avgFirstHalf, avgSecondHalf, change, percentChange, trend };
+  let trend, percentChange, trendLabel;
+  
+  if (avgFirstHalf === 0) {
+    if (avgSecondHalf > 0) {
+      trend = 'worsening';
+      trendLabel = 'Worse';
+      percentChange = '';
+    } else {
+      trend = 'stable';
+      trendLabel = 'No change';
+      percentChange = '';
+    }
+  } else {
+    percentChange = ((change / avgFirstHalf) * 100).toFixed(1);
+    trend = change > 0.1 ? 'worsening' : change < -0.1 ? 'improving' : 'stable';
+    trendLabel = trend === 'improving' ? `${Math.abs(percentChange)}% better` : 
+                 trend === 'worsening' ? `${percentChange}% worse` : 'No significant change';
+  }
+  
+  return { avgFirstHalf, avgSecondHalf, change, percentChange, trend, trendLabel };
 };
 
 export default function Dashboard() {
   const [items, setItems] = useState([]);
-  const [logs, setLogs] = useState({});
   const [selectedItem, setSelectedItem] = useState(null);
-
+  const [range, setRange] = useState(7);
+  
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.items && parsed.items.length > 0) {
-          setItems(parsed.items);
-          setLogs(parsed.logs || {});
-          setSelectedItem(parsed.items[0].id);
-        }
+    const stored = localStorage.getItem(DASHBOARD_RANGE_KEY);
+    if (stored) {
+      const parsedRange = parseInt(stored, 10);
+      if ([7, 15, 30, 90].includes(parsedRange)) {
+        setRange(parsedRange);
       }
-    } catch (error) {
-      console.warn('Could not load tracking data', error);
     }
   }, []);
+  
+  useEffect(() => {
+    localStorage.setItem(DASHBOARD_RANGE_KEY, range.toString());
+  }, [range]);
 
-  const last90Days = getLast90Days();
-  const currentItem = items.find((item) => item.id === selectedItem);
+  useEffect(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const data = JSON.parse(stored);
+      const storedItems = data.items || [];
+      setItems(storedItems);
+      if (storedItems.length > 0 && !selectedItem) {
+        setSelectedItem(storedItems[0].id);
+      }
+    }
+  }, [selectedItem]);
 
-  if (!currentItem) {
-    return (
-      <div className="min-h-screen bg-slate-100 px-4 pb-10 pt-6 text-slate-800 dark:bg-slate-950 dark:text-slate-100">
-        <div className="mx-auto max-w-4xl text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-600">Dashboard</p>
-          <h1 className="mt-2 text-3xl font-bold">No tracking data yet</h1>
-          <p className="mt-4 text-slate-600 dark:text-slate-400">Go to the Tracking page to start tracking items.</p>
-        </div>
-      </div>
-    );
-  }
+  const chartData = (() => {
+    const days = getLastNDays(range);
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (!stored || !selectedItem) return [];
+    const data = JSON.parse(stored);
+    const logs = data.logs || {};
+    return days.map(day => ({
+      date: day,
+      level: logs[day]?.[selectedItem] || 'zero',
+    }));
+  })();
 
-  const chartData = last90Days.map((date) => ({
-    date,
-    level: logs[date]?.[selectedItem] || 'zero',
+  const metrics = calculateTrendMetrics(chartData);
+
+  const statistics = (() => {
+    const counts = { zero: 0, light: 0, medium: 0, large: 0, extreme: 0 };
+    chartData.forEach(d => {
+      counts[d.level]++;
+    });
+    return LEVELS.map(level => ({
+      ...level,
+      count: counts[level.key],
+      percentage: ((counts[level.key] / range) * 100).toFixed(0),
+    }));
+  })();
+
+  const chartHeight = 300;
+  const maxScore = Math.max(...chartData.map(d => LEVELS.find(l => l.key === d.level).score), 1);
+  
+  const getDotSize = () => range === 90 ? 3 : 5;
+  const getLabelFrequency = () => {
+    if (range <= 7) return 1;
+    if (range <= 15) return 2;
+    if (range <= 30) return 5;
+    return 15;
+  };
+
+  const labelFreq = getLabelFrequency();
+  const dotSize = getDotSize();
+  const viewBoxWidth = range * 10 + 80;
+  const viewBoxHeight = chartHeight + 60;
+
+  const pointsData = chartData.map((d, idx) => ({
+    x: 50 + idx * 10,
+    y: chartHeight - (LEVELS.find(l => l.key === d.level).score / maxScore) * (chartHeight - 20),
+    score: LEVELS.find(l => l.key === d.level).score,
+    date: d.date,
+    idx,
   }));
 
-  const trendMetrics = calculateTrendMetrics(chartData);
-
-  const maxScore = LEVELS[LEVELS.length - 1].score;
-  const chartHeight = 400;
-  const dayWidth = 12; // Width for each day
-  const chartWidth = last90Days.length * dayWidth + 100;
-
-  // Generate SVG line chart with better day labels
-  const points = chartData
-    .map((data, index) => {
-      const levelMeta = getLevelMeta(data.level);
-      const x = 50 + index * dayWidth;
-      const y = chartHeight - (levelMeta.score / maxScore) * (chartHeight - 80) + 40;
-      return `${x},${y}`;
-    })
-    .join(' ');
-
-  const dotElements = chartData
-    .map((data, index) => {
-      const levelMeta = getLevelMeta(data.level);
-      const x = 50 + index * dayWidth;
-      const y = chartHeight - (levelMeta.score / maxScore) * (chartHeight - 80) + 40;
-      const dateObj = new Date(data.date + 'T00:00:00');
-      const dayLabel = dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      
-      return (
-        <g key={`day-${index}`}>
-          {/* Vertical gridline for each day */}
-          <line
-            x1={x}
-            y1="40"
-            x2={x}
-            y2={chartHeight + 10}
-            stroke="currentColor"
-            strokeWidth="0.5"
-            opacity="0.1"
-          />
-          
-          {/* Dot */}
-          <circle
-            cx={x}
-            cy={y}
-            r="5"
-            fill={levelMeta.color}
-            stroke="white"
-            strokeWidth="2"
-          />
-          
-          {/* Day label */}
-          <text
-            x={x}
-            y={chartHeight + 30}
-            textAnchor="middle"
-            fontSize="11"
-            fill="currentColor"
-            opacity="0.7"
-          >
-            {dayLabel}
-          </text>
-        </g>
-      );
-    });
+  const polylinePoints = pointsData.map(p => `${p.x},${p.y}`).join(' ');
 
   return (
-    <div className="min-h-screen bg-slate-100 px-4 pb-10 pt-6 text-slate-800 dark:bg-slate-950 dark:text-slate-100">
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-600">Analytics</p>
-          <h1 className="mt-2 text-3xl font-bold">Tracking Dashboard</h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Last 90 days trend analysis</p>
-        </div>
+    <div className="min-h-screen bg-white dark:bg-slate-900 p-4 pt-32">
+      <div className="max-w-6xl mx-auto">
+        <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-8">Dashboard</h1>
 
-        {/* Item Selector */}
-        <div className="mb-6 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <label className="mb-2 block text-sm font-medium text-slate-600 dark:text-slate-300">
-            Select tracked item
-          </label>
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6 mb-6">
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Select Item</h2>
           <div className="flex flex-wrap gap-2">
-            {items.map((item) => (
+            {items.map(item => (
               <button
                 key={item.id}
                 onClick={() => setSelectedItem(item.id)}
-                className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
+                className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
                   selectedItem === item.id
-                    ? 'border-sky-500 bg-sky-500 text-white shadow-sm'
-                    : 'border-slate-200 bg-white text-slate-700 hover:border-sky-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                    ? 'bg-sky-500 text-white border-2 border-sky-500'
+                    : 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white border-2 border-transparent hover:border-sky-500'
                 }`}
               >
                 {item.name}
               </button>
             ))}
           </div>
-        </div>
 
-        {/* Trend Summary */}
-        <div className="mb-6 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500 dark:text-slate-400">Overall Trend</p>
-            <div className="mt-2 flex items-center gap-2">
-              {trendMetrics.trend === 'improving' && (
-                <>
-                  <span className="text-2xl">📉</span>
-                  <div>
-                    <p className="text-lg font-bold text-green-600">Improving</p>
-                    <p className="text-xs text-green-600">{Math.abs(trendMetrics.percentChange)}% better</p>
-                  </div>
-                </>
-              )}
-              {trendMetrics.trend === 'worsening' && (
-                <>
-                  <span className="text-2xl">📈</span>
-                  <div>
-                    <p className="text-lg font-bold text-red-600">Worsening</p>
-                    <p className="text-xs text-red-600">{trendMetrics.percentChange}% worse</p>
-                  </div>
-                </>
-              )}
-              {trendMetrics.trend === 'stable' && (
-                <>
-                  <span className="text-2xl">➡️</span>
-                  <div>
-                    <p className="text-lg font-bold text-slate-600 dark:text-slate-300">Stable</p>
-                    <p className="text-xs text-slate-600 dark:text-slate-400">No significant change</p>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500 dark:text-slate-400">First 45 Days Avg</p>
-            <p className="mt-2 text-3xl font-bold">{trendMetrics.avgFirstHalf.toFixed(1)}</p>
-            <p className="text-xs text-slate-600 dark:text-slate-400">severity level</p>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500 dark:text-slate-400">Last 45 Days Avg</p>
-            <p className="mt-2 text-3xl font-bold">{trendMetrics.avgSecondHalf.toFixed(1)}</p>
-            <p className="text-xs text-slate-600 dark:text-slate-400">severity level</p>
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 mt-6">Time Range</h2>
+          <div className="flex flex-wrap gap-2">
+            {[7, 15, 30, 90].map(r => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
+                  range === r
+                    ? 'bg-sky-500 text-white border-2 border-sky-500'
+                    : 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white border-2 border-transparent hover:border-sky-500'
+                }`}
+              >
+                {r === 30 ? '1 month' : r === 90 ? '3 months' : `${r} days`}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Chart Card */}
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div className="mb-4">
-            <h2 className="text-xl font-bold">{currentItem.name} Trend</h2>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              Last 90 days · Higher means more severe
-            </p>
-          </div>
+        {selectedItem && chartData.length > 0 && (
+          <>
+            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6 mb-6">
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-6">
+                Last {range} days trend analysis
+              </h2>
 
-          {/* Stats */}
-          <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
-            {LEVELS.map((level) => {
-              const count = chartData.filter((d) => d.level === level.key).length;
-              const percentage = ((count / chartData.length) * 100).toFixed(1);
-              return (
-                <div key={level.key} className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800">
-                  <div className="flex items-center gap-2">
-                    <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: level.color }} />
-                    <span className="text-xs font-medium text-slate-600 dark:text-slate-400">{level.label}</span>
-                  </div>
-                  <p className="mt-1 text-lg font-bold">{count}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">{percentage}%</p>
-                </div>
-              );
-            })}
-          </div>
+              <div className="mb-6 overflow-hidden">
+                <svg viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`} width="100%" height="auto" className="w-full">
+                  <defs>
+                    <linearGradient id="trendGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.3" />
+                      <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0" />
+                    </linearGradient>
+                  </defs>
 
-          {/* SVG Chart */}
-          <div className="overflow-x-auto rounded-lg bg-slate-50 p-4 dark:bg-slate-800">
-            <svg
-              width={chartWidth}
-              height={chartHeight + 60}
-              className="text-slate-600 dark:text-slate-300"
-              style={{ minWidth: '100%' }}
-            >
-              {/* Y-axis labels and gridlines */}
-              {[0, 1, 2, 3, 4].map((i) => {
-                const y = chartHeight - (i / maxScore) * (chartHeight - 80) + 40;
-                const levelLabel = LEVELS[i]?.label || i;
-                return (
-                  <g key={`grid-${i}`}>
+                  {/* Y-axis gridlines */}
+                  {Array.from({ length: 5 }).map((_, i) => (
                     <line
-                      x1="35"
-                      y1={y}
-                      x2={chartWidth - 20}
-                      y2={y}
-                      stroke="currentColor"
-                      strokeWidth="1"
+                      key={`grid-${i}`}
+                      x1="65"
+                      y1={20 + (i * (chartHeight - 20)) / 4}
+                      x2={viewBoxWidth - 20}
+                      y2={20 + (i * (chartHeight - 20)) / 4}
+                      stroke="#e2e8f0"
                       strokeDasharray="4,4"
-                      opacity="0.2"
+                      className="dark:stroke-slate-700"
                     />
-                    <text x="20" y={y + 4} fontSize="12" textAnchor="end" opacity="0.6" fontWeight="500">
-                      {levelLabel}
+                  ))}
+
+                  {/* Y-axis labels */}
+                  {LEVELS.map((level, idx) => (
+                    <text
+                      key={`label-${idx}`}
+                      x="10"
+                      y={chartHeight - (idx * (chartHeight - 20)) / 4 + 5}
+                      fontSize="11"
+                      fill="#64748b"
+                      className="dark:fill-slate-400"
+                      textAnchor="start"
+                    >
+                      {level.label}
                     </text>
-                  </g>
-                );
-              })}
+                  ))}
 
-              {/* Area under line (gradient effect) */}
-              <defs>
-                <linearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.2" />
-                  <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0" />
-                </linearGradient>
-              </defs>
+                  {/* Polyline */}
+                  <polyline
+                    points={polylinePoints}
+                    fill="url(#trendGradient)"
+                    stroke="#0ea5e9"
+                    strokeWidth="2.5"
+                    vectorEffect="non-scaling-stroke"
+                  />
 
-              {/* Fill area under line */}
-              <polygon
-                points={`50,${chartHeight + 40} ${points} ${50 + (last90Days.length - 1) * dayWidth},${chartHeight + 40}`}
-                fill="url(#areaGradient)"
-              />
+                  {/* Dots and date labels */}
+                  {pointsData.map((p, idx) => (
+                    <g key={`point-${idx}`}>
+                      <circle cx={p.x} cy={p.y} r={dotSize} fill="#0ea5e9" />
+                      {idx % labelFreq === 0 && (
+                        <text
+                          x={p.x}
+                          y={chartHeight + 35}
+                          fontSize="10"
+                          fill="#64748b"
+                          className="dark:fill-slate-400"
+                          textAnchor="middle"
+                        >
+                          {p.date}
+                        </text>
+                      )}
+                    </g>
+                  ))}
+                </svg>
+              </div>
 
-              {/* Line */}
-              <polyline
-                points={points}
-                fill="none"
-                stroke="#0ea5e9"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-
-              {/* Days and dots */}
-              {dotElements}
-            </svg>
-          </div>
-
-          {/* Legend */}
-          <div className="mt-6">
-            <p className="mb-3 text-sm font-medium">Severity Scale</p>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-              {LEVELS.map((level) => (
-                <div key={level.key} className="flex items-center gap-2">
-                  <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: level.color }} />
-                  <span className="text-sm text-slate-700 dark:text-slate-200">{level.label}</span>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-slate-700 dark:to-slate-600 rounded-lg p-4">
+                  <div className="text-sm text-slate-600 dark:text-slate-400 font-semibold">Overall Trend</div>
+                  <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
+                    {metrics.trendLabel}
+                  </div>
                 </div>
-              ))}
+                <div className="bg-gradient-to-br from-green-50 to-green-100 dark:from-slate-700 dark:to-slate-600 rounded-lg p-4">
+                  <div className="text-sm text-slate-600 dark:text-slate-400 font-semibold">
+                    First Half Avg
+                  </div>
+                  <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
+                    {metrics.avgFirstHalf.toFixed(2)}
+                  </div>
+                </div>
+                <div className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-slate-700 dark:to-slate-600 rounded-lg p-4">
+                  <div className="text-sm text-slate-600 dark:text-slate-400 font-semibold">
+                    Last Half Avg
+                  </div>
+                  <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
+                    {metrics.avgSecondHalf.toFixed(2)}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+
+            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Statistics</h2>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                {statistics.map(stat => (
+                  <div
+                    key={stat.key}
+                    className="rounded-lg p-4 text-center"
+                    style={{
+                      backgroundColor: `${stat.color}20`,
+                      borderLeft: `4px solid ${stat.color}`,
+                    }}
+                  >
+                    <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                      {stat.label}
+                    </div>
+                    <div className="text-2xl font-bold mt-2" style={{ color: stat.color }}>
+                      {stat.count}
+                    </div>
+                    <div className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                      {stat.percentage}%
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6 mt-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Legend</h2>
+              <div className="flex flex-wrap gap-4">
+                {LEVELS.map(level => (
+                  <div key={level.key} className="flex items-center gap-2">
+                    <div
+                      className="w-4 h-4 rounded-full"
+                      style={{ backgroundColor: level.color }}
+                    ></div>
+                    <span className="text-sm text-slate-700 dark:text-slate-300">
+                      {level.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
