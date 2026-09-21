@@ -6,12 +6,12 @@ import {
   doc,
   onSnapshot,
   addDoc,
-  deleteDoc,
   deleteField,
   setDoc,
-  updateDoc,
   writeBatch,
 } from 'firebase/firestore';
+import SyncStatus from './components/SyncStatus';
+import { reportListenerError, reportSnapshot, trackWrite } from './sync';
 
 export const ITEMS_COLLECTION = 'trackingItems';
 export const LOGS_COLLECTION = 'trackingLogs';
@@ -110,28 +110,30 @@ export default function TrackingPage() {
     const unsubItems = onSnapshot(
       collection(db, ITEMS_COLLECTION),
       (snap) => {
+        reportSnapshot(snap);
         const loaded = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setItems(loaded);
 
         // First ever run: plant the demo metrics and their history.
         if (loaded.length === 0 && !snap.metadata.fromCache && !seedAttempted.current) {
           seedAttempted.current = true;
-          seedDemoData().catch((error) => console.warn('Could not seed demo data', error));
+          trackWrite('demo data', seedDemoData);
         }
       },
-      (error) => console.warn('trackingItems onSnapshot', error)
+      (error) => reportListenerError('tracking items', error)
     );
 
     const unsubLogs = onSnapshot(
       collection(db, LOGS_COLLECTION),
       (snap) => {
+        reportSnapshot(snap);
         const loaded = {};
         snap.docs.forEach((d) => {
           loaded[d.id] = d.data();
         });
         setLogs(loaded);
       },
-      (error) => console.warn('trackingLogs onSnapshot', error)
+      (error) => reportListenerError('tracking logs', error)
     );
 
     return () => {
@@ -190,30 +192,24 @@ export default function TrackingPage() {
       return;
     }
 
-    addDoc(collection(db, ITEMS_COLLECTION), { name: trimmed }).catch((error) =>
-      console.warn('Could not add tracking item', error)
-    );
+    trackWrite(`add "${trimmed}"`, () => addDoc(collection(db, ITEMS_COLLECTION), { name: trimmed }));
     setNewItemName('');
   };
 
-  const removeItem = async (id) => {
-    try {
-      await deleteDoc(doc(db, ITEMS_COLLECTION, id));
-      // Strip the metric out of every day that logged it.
-      const affected = Object.keys(logs).filter((dateKey) => logs[dateKey]?.[id]);
-      await Promise.all(
-        affected.map((dateKey) =>
-          updateDoc(doc(db, LOGS_COLLECTION, dateKey), { [id]: deleteField() })
-        )
-      );
-    } catch (error) {
-      console.warn('Could not remove tracking item', error);
-    }
+  // One batch, so a failure can't leave the item deleted but its history half-stripped.
+  const removeItem = (id) => {
+    const name = items.find((item) => item.id === id)?.name ?? 'item';
+    const batch = writeBatch(db);
+    batch.delete(doc(db, ITEMS_COLLECTION, id));
+    Object.keys(logs)
+      .filter((dateKey) => logs[dateKey]?.[id])
+      .forEach((dateKey) => batch.update(doc(db, LOGS_COLLECTION, dateKey), { [id]: deleteField() }));
+    trackWrite(`remove "${name}"`, () => batch.commit());
   };
 
   const setLevel = (itemId, levelKey) => {
-    setDoc(doc(db, LOGS_COLLECTION, selectedDate), { [itemId]: levelKey }, { merge: true }).catch(
-      (error) => console.warn('Could not save level', error)
+    trackWrite(`log ${selectedDate}`, () =>
+      setDoc(doc(db, LOGS_COLLECTION, selectedDate), { [itemId]: levelKey }, { merge: true })
     );
   };
 
@@ -232,6 +228,8 @@ export default function TrackingPage() {
             📊 Dashboard
           </Link>
         </div>
+
+        <SyncStatus />
 
         {/* Date Navigation */}
         <div className="mb-6 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">

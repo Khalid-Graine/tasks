@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import { db } from './firebase';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
+import SyncStatus from './components/SyncStatus';
+import { reportListenerError, reportSnapshot, trackWrite } from './sync';
 
 const ITEMS_COLLECTION = 'trackingItems';
 const LOGS_COLLECTION = 'trackingLogs';
-const DASHBOARD_RANGE_KEY = 'dashboard-range';
+const SETTINGS_DOC = doc(db, 'settings', 'dashboard');
+const RANGES = [7, 15, 30, 90];
 
 const LEVELS = [
   { key: 'zero', label: 'Zero', score: 0, color: '#10b981' },
@@ -66,43 +69,50 @@ export default function Dashboard() {
   const [range, setRange] = useState(7);
   
   useEffect(() => {
-    const stored = localStorage.getItem(DASHBOARD_RANGE_KEY);
-    if (stored) {
-      const parsedRange = parseInt(stored, 10);
-      if ([7, 15, 30, 90].includes(parsedRange)) {
-        setRange(parsedRange);
-      }
-    }
-  }, []);
-  
-  useEffect(() => {
-    localStorage.setItem(DASHBOARD_RANGE_KEY, range.toString());
-  }, [range]);
+    const unsubSettings = onSnapshot(
+      SETTINGS_DOC,
+      (snap) => {
+        const stored = snap.data()?.range;
+        if (RANGES.includes(stored)) setRange(stored);
+      },
+      (error) => reportListenerError('dashboard settings', error)
+    );
 
-  useEffect(() => {
     const unsubItems = onSnapshot(
       collection(db, ITEMS_COLLECTION),
-      (snap) => setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      (error) => console.warn('trackingItems onSnapshot', error)
+      (snap) => {
+        reportSnapshot(snap);
+        setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      },
+      (error) => reportListenerError('tracking items', error)
     );
 
     const unsubLogs = onSnapshot(
       collection(db, LOGS_COLLECTION),
       (snap) => {
+        reportSnapshot(snap);
         const loaded = {};
         snap.docs.forEach((d) => {
           loaded[d.id] = d.data();
         });
         setLogs(loaded);
       },
-      (error) => console.warn('trackingLogs onSnapshot', error)
+      (error) => reportListenerError('tracking logs', error)
     );
 
     return () => {
+      unsubSettings();
       unsubItems();
       unsubLogs();
     };
   }, []);
+
+  // Written on click rather than in an effect, so a snapshot arriving from
+  // another device can't bounce straight back into another write.
+  const changeRange = (next) => {
+    setRange(next);
+    trackWrite('dashboard range', () => setDoc(SETTINGS_DOC, { range: next }, { merge: true }));
+  };
 
   // Fall back to the first metric until one is picked, rather than syncing state in an effect.
   const activeItemId = items.some(item => item.id === selectedItem)
@@ -162,6 +172,8 @@ export default function Dashboard() {
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-8">Dashboard</h1>
 
+        <SyncStatus />
+
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6 mb-6">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Select Item</h2>
           <div className="flex flex-wrap gap-2">
@@ -182,10 +194,10 @@ export default function Dashboard() {
 
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 mt-6">Time Range</h2>
           <div className="flex flex-wrap gap-2">
-            {[7, 15, 30, 90].map(r => (
+            {RANGES.map(r => (
               <button
                 key={r}
-                onClick={() => setRange(r)}
+                onClick={() => changeRange(r)}
                 className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
                   range === r
                     ? 'bg-sky-500 text-white border-2 border-sky-500'

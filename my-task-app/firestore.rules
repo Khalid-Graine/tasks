@@ -1,0 +1,13 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // This app has no sign-in: every device shares one dataset, so the rules
+    // cannot identify who is writing. Anyone who pulls the Firebase config out
+    // of the deployed JS bundle can read, edit or delete this data.
+    // Adding auth is what would let these rules narrow to a single user.
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

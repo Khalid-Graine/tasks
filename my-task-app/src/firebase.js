@@ -1,5 +1,9 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore, enableIndexedDbPersistence } from "firebase/firestore";
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -12,10 +16,9 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
 
-// Enable offline persistence (stores Firestore cache in IndexedDB)
-enableIndexedDbPersistence(db).catch((err) => {
-  // common errors: failed-precondition (multiple tabs open) or unimplemented
-  console.warn('Could not enable IndexedDB persistence:', err.code || err.message || err);
+// Firestore on the server is where data lives. The local cache only bridges
+// offline gaps and page loads; sync.js reports writes the server hasn't confirmed.
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
 });
