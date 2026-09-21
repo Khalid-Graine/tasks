@@ -1,7 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { db } from './firebase';
+import {
+  collection,
+  doc,
+  onSnapshot,
+  addDoc,
+  deleteDoc,
+  deleteField,
+  setDoc,
+  updateDoc,
+  writeBatch,
+} from 'firebase/firestore';
 
-const STORAGE_KEY = 'custom-tracking-v2';
+export const ITEMS_COLLECTION = 'trackingItems';
+export const LOGS_COLLECTION = 'trackingLogs';
 
 const LEVELS = [
   { key: 'zero', label: 'Zero', score: 0, color: 'bg-emerald-500', hex: '#10b981' },
@@ -12,8 +25,6 @@ const LEVELS = [
 ];
 
 const getTodayKey = () => new Date().toISOString().slice(0, 10);
-
-const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const getLevelMeta = (levelKey) => LEVELS.find((level) => level.key === levelKey) || null;
 
@@ -28,8 +39,7 @@ const DEMO_SHAPES = {
   Daydreaming: (t) => 1 + 2.3 * t,
 };
 
-const getDefaultItems = () =>
-  Object.keys(DEMO_SHAPES).map((name) => ({ id: makeId(), name }));
+const DEMO_ITEM_NAMES = Object.keys(DEMO_SHAPES);
 
 const getThreeMonthsAgo = () => {
   const date = new Date();
@@ -44,7 +54,7 @@ const pseudoRandom = (seed) => {
   return x - Math.floor(x);
 };
 
-const generateTestData = (items) => {
+const buildDemoLogs = (items) => {
   const logs = {};
 
   items.forEach((item, itemIndex) => {
@@ -68,44 +78,67 @@ const generateTestData = (items) => {
   return logs;
 };
 
+// One-time write of the demo metrics plus DEMO_DAYS of history, in a single batch
+// (4 items + 90 day-docs stays well under Firestore's 500-write batch limit).
+const seedDemoData = async () => {
+  const batch = writeBatch(db);
+
+  const items = DEMO_ITEM_NAMES.map((name) => {
+    const ref = doc(collection(db, ITEMS_COLLECTION));
+    batch.set(ref, { name });
+    return { id: ref.id, name };
+  });
+
+  const logs = buildDemoLogs(items);
+  Object.entries(logs).forEach(([dateKey, dayLevels]) => {
+    batch.set(doc(db, LOGS_COLLECTION, dateKey), dayLevels, { merge: true });
+  });
+
+  await batch.commit();
+};
+
 export default function TrackingPage() {
   const [items, setItems] = useState([]);
   const [logs, setLogs] = useState({});
   const [newItemName, setNewItemName] = useState('');
   const [selectedDate, setSelectedDate] = useState(getTodayKey());
 
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.items && parsed.items.length > 0) {
-          setItems(parsed.items);
-          setLogs(parsed.logs || {});
-          return;
-        }
-      }
-      const defaults = getDefaultItems();
-      setItems(defaults);
-      // Generate test data for demonstration
-      const testData = generateTestData(defaults);
-      setLogs(testData);
-    } catch (error) {
-      console.warn('Could not load tracking data', error);
-      const defaults = getDefaultItems();
-      setItems(defaults);
-      const testData = generateTestData(defaults);
-      setLogs(testData);
-    }
-  }, []);
+  const seedAttempted = useRef(false);
 
+  // Firestore is the source of truth; its IndexedDB cache covers offline/refresh.
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ items, logs }));
-    } catch (error) {
-      console.warn('Could not save tracking data', error);
-    }
-  }, [items, logs]);
+    const unsubItems = onSnapshot(
+      collection(db, ITEMS_COLLECTION),
+      (snap) => {
+        const loaded = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setItems(loaded);
+
+        // First ever run: plant the demo metrics and their history.
+        if (loaded.length === 0 && !snap.metadata.fromCache && !seedAttempted.current) {
+          seedAttempted.current = true;
+          seedDemoData().catch((error) => console.warn('Could not seed demo data', error));
+        }
+      },
+      (error) => console.warn('trackingItems onSnapshot', error)
+    );
+
+    const unsubLogs = onSnapshot(
+      collection(db, LOGS_COLLECTION),
+      (snap) => {
+        const loaded = {};
+        snap.docs.forEach((d) => {
+          loaded[d.id] = d.data();
+        });
+        setLogs(loaded);
+      },
+      (error) => console.warn('trackingLogs onSnapshot', error)
+    );
+
+    return () => {
+      unsubItems();
+      unsubLogs();
+    };
+  }, []);
 
   const todayKey = getTodayKey();
   const isToday = selectedDate === todayKey;
@@ -157,31 +190,31 @@ export default function TrackingPage() {
       return;
     }
 
-    setItems((prev) => [...prev, { id: makeId(), name: trimmed }]);
+    addDoc(collection(db, ITEMS_COLLECTION), { name: trimmed }).catch((error) =>
+      console.warn('Could not add tracking item', error)
+    );
     setNewItemName('');
   };
 
-  const removeItem = (id) => {
-    setItems((prev) => prev.filter((item) => item.id !== id));
-    setLogs((prev) => {
-      const next = { ...prev };
-      Object.keys(next).forEach((dateKey) => {
-        if (next[dateKey]?.[id]) {
-          delete next[dateKey][id];
-        }
-      });
-      return next;
-    });
+  const removeItem = async (id) => {
+    try {
+      await deleteDoc(doc(db, ITEMS_COLLECTION, id));
+      // Strip the metric out of every day that logged it.
+      const affected = Object.keys(logs).filter((dateKey) => logs[dateKey]?.[id]);
+      await Promise.all(
+        affected.map((dateKey) =>
+          updateDoc(doc(db, LOGS_COLLECTION, dateKey), { [id]: deleteField() })
+        )
+      );
+    } catch (error) {
+      console.warn('Could not remove tracking item', error);
+    }
   };
 
   const setLevel = (itemId, levelKey) => {
-    setLogs((prev) => ({
-      ...prev,
-      [selectedDate]: {
-        ...(prev[selectedDate] || {}),
-        [itemId]: levelKey,
-      },
-    }));
+    setDoc(doc(db, LOGS_COLLECTION, selectedDate), { [itemId]: levelKey }, { merge: true }).catch(
+      (error) => console.warn('Could not save level', error)
+    );
   };
 
   return (

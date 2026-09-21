@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
+import { db } from './firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
 
-const STORAGE_KEY = 'custom-tracking-v2';
+const ITEMS_COLLECTION = 'trackingItems';
+const LOGS_COLLECTION = 'trackingLogs';
 const DASHBOARD_RANGE_KEY = 'dashboard-range';
 
 const LEVELS = [
@@ -10,8 +13,6 @@ const LEVELS = [
   { key: 'large', label: 'Large', score: 3, color: '#ef4444' },
   { key: 'extreme', label: 'Extreme', score: 4, color: '#be185d' },
 ];
-
-const getLevelMeta = (levelKey) => LEVELS.find((level) => level.key === levelKey) || LEVELS[0];
 
 const getLastNDays = (n) => {
   const days = [];
@@ -60,6 +61,7 @@ const calculateTrendMetrics = (chartData) => {
 
 export default function Dashboard() {
   const [items, setItems] = useState([]);
+  const [logs, setLogs] = useState({});
   const [selectedItem, setSelectedItem] = useState(null);
   const [range, setRange] = useState(7);
   
@@ -78,26 +80,40 @@ export default function Dashboard() {
   }, [range]);
 
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const data = JSON.parse(stored);
-      const storedItems = data.items || [];
-      setItems(storedItems);
-      if (storedItems.length > 0 && !selectedItem) {
-        setSelectedItem(storedItems[0].id);
-      }
-    }
-  }, [selectedItem]);
+    const unsubItems = onSnapshot(
+      collection(db, ITEMS_COLLECTION),
+      (snap) => setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (error) => console.warn('trackingItems onSnapshot', error)
+    );
+
+    const unsubLogs = onSnapshot(
+      collection(db, LOGS_COLLECTION),
+      (snap) => {
+        const loaded = {};
+        snap.docs.forEach((d) => {
+          loaded[d.id] = d.data();
+        });
+        setLogs(loaded);
+      },
+      (error) => console.warn('trackingLogs onSnapshot', error)
+    );
+
+    return () => {
+      unsubItems();
+      unsubLogs();
+    };
+  }, []);
+
+  // Fall back to the first metric until one is picked, rather than syncing state in an effect.
+  const activeItemId = items.some(item => item.id === selectedItem)
+    ? selectedItem
+    : items[0]?.id ?? null;
 
   const chartData = (() => {
-    const days = getLastNDays(range);
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (!stored || !selectedItem) return [];
-    const data = JSON.parse(stored);
-    const logs = data.logs || {};
-    return days.map(day => ({
+    if (!activeItemId) return [];
+    return getLastNDays(range).map(day => ({
       date: day,
-      level: logs[day]?.[selectedItem] || 'zero',
+      level: logs[day]?.[activeItemId] || 'zero',
     }));
   })();
 
@@ -154,7 +170,7 @@ export default function Dashboard() {
                 key={item.id}
                 onClick={() => setSelectedItem(item.id)}
                 className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
-                  selectedItem === item.id
+                  activeItemId === item.id
                     ? 'bg-sky-500 text-white border-2 border-sky-500'
                     : 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white border-2 border-transparent hover:border-sky-500'
                 }`}
@@ -182,7 +198,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {selectedItem && chartData.length > 0 && (
+        {activeItemId && chartData.length > 0 && (
           <>
             <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg p-6 mb-6">
               <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-6">
