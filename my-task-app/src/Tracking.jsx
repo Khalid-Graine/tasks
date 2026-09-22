@@ -97,6 +97,35 @@ const seedDemoData = async () => {
   await batch.commit();
 };
 
+// Keeps a local draft so typing doesn't write to Firestore on every keystroke.
+function NameInput({ name, onSave }) {
+  const [draft, setDraft] = useState(name);
+  const cancelled = useRef(false);
+
+  const commit = () => {
+    if (cancelled.current || !onSave(draft)) setDraft(name);
+    cancelled.current = false;
+  };
+
+  return (
+    <input
+      type="text"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+        if (event.key === 'Escape') {
+          cancelled.current = true;
+          event.currentTarget.blur();
+        }
+      }}
+      aria-label={`Rename ${name}`}
+      className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-lg font-bold outline-none focus:border-sky-400 dark:border-slate-700 dark:bg-slate-800"
+    />
+  );
+}
+
 export default function TrackingPage() {
   const [items, setItems] = useState([]);
   const [logs, setLogs] = useState({});
@@ -227,6 +256,23 @@ export default function TrackingPage() {
     trackWrite(`restore "${name}"`, () =>
       setDoc(doc(db, ITEMS_COLLECTION, id), { archived: deleteField() }, { merge: true })
     );
+  };
+
+  // Returns false when the name is rejected so the input can revert.
+  const renameItem = (id, name) => {
+    const trimmed = name.trim();
+    const current = items.find((item) => item.id === id);
+    if (!current || !trimmed || trimmed === current.name) return false;
+
+    const taken = items.some(
+      (item) => item.id !== id && item.name.trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    if (taken) return false;
+
+    trackWrite(`rename "${current.name}"`, () =>
+      setDoc(doc(db, ITEMS_COLLECTION, id), { name: trimmed }, { merge: true })
+    );
+    return true;
   };
 
   const setLevel = (itemId, levelKey) => {
@@ -367,7 +413,15 @@ export default function TrackingPage() {
                       </svg>
                     </button>
                   )}
-                  <h3 className="truncate text-lg font-bold">{item.name}</h3>
+                  {editing ? (
+                    <NameInput
+                      key={item.name}
+                      name={item.name}
+                      onSave={(name) => renameItem(item.id, name)}
+                    />
+                  ) : (
+                    <h3 className="truncate text-lg font-bold">{item.name}</h3>
+                  )}
                   <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium dark:bg-slate-800">
                     <span className={`h-2 w-2 rounded-full ${item.levelMeta ? item.levelMeta.color : 'bg-slate-300 dark:bg-slate-600'}`} />
                     {item.levelMeta ? item.levelMeta.label : 'Not set'}
