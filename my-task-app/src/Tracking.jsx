@@ -17,11 +17,11 @@ export const ITEMS_COLLECTION = 'trackingItems';
 export const LOGS_COLLECTION = 'trackingLogs';
 
 const LEVELS = [
-  { key: 'zero', label: 'Zero', score: 0, color: 'bg-emerald-500', hex: '#10b981' },
-  { key: 'light', label: 'Light', score: 1, color: 'bg-yellow-500', hex: '#eab308' },
-  { key: 'medium', label: 'Medium', score: 2, color: 'bg-orange-500', hex: '#f97316' },
-  { key: 'large', label: 'Large', score: 3, color: 'bg-red-500', hex: '#ef4444' },
-  { key: 'extreme', label: 'Extreme', score: 4, color: 'bg-rose-700', hex: '#be123c' },
+  { key: 'zero', label: '0', score: 0, color: 'bg-emerald-500', hex: '#10b981' },
+  { key: 'light', label: '1', score: 1, color: 'bg-yellow-500', hex: '#eab308' },
+  { key: 'medium', label: '2', score: 2, color: 'bg-orange-500', hex: '#f97316' },
+  { key: 'large', label: '3', score: 3, color: 'bg-red-500', hex: '#ef4444' },
+  { key: 'extreme', label: '4', score: 4, color: 'bg-rose-700', hex: '#be123c' },
 ];
 
 const getTodayKey = () => new Date().toISOString().slice(0, 10);

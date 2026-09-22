@@ -21,11 +21,11 @@ const VIEWS = [
 ];
 
 const LEVELS = [
-  { key: 'zero', label: 'Zero', score: 0 },
-  { key: 'light', label: 'Light', score: 1 },
-  { key: 'medium', label: 'Medium', score: 2 },
-  { key: 'large', label: 'Large', score: 3 },
-  { key: 'extreme', label: 'Extreme', score: 4 },
+  { key: 'zero', label: '0', score: 0 },
+  { key: 'light', label: '1', score: 1 },
+  { key: 'medium', label: '2', score: 2 },
+  { key: 'large', label: '3', score: 3 },
+  { key: 'extreme', label: '4', score: 4 },
 ];
 
 const SCORE_BY_KEY = Object.fromEntries(LEVELS.map((level) => [level.key, level.score]));
