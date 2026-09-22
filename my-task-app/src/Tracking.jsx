@@ -28,6 +28,10 @@ const getTodayKey = () => new Date().toISOString().slice(0, 10);
 
 const getLevelMeta = (levelKey) => LEVELS.find((level) => level.key === levelKey) || null;
 
+// Items saved before ordering existed have no `order`; they sort after the rest.
+const orderOf = (item) => item.order ?? Number.MAX_SAFE_INTEGER;
+const byOrder = (a, b) => orderOf(a) - orderOf(b) || a.name.localeCompare(b.name);
+
 const DEMO_DAYS = 90;
 
 // Each metric gets its own shape over the window so the dashboard trends differ.
@@ -132,9 +136,14 @@ export default function TrackingPage() {
   const [newItemName, setNewItemName] = useState('');
   const [selectedDate, setSelectedDate] = useState(getTodayKey());
   const [editing, setEditing] = useState(false);
+  // While dragging, the live id order; null otherwise.
+  const [dragOrder, setDragOrder] = useState(null);
+  const [draggingId, setDraggingId] = useState(null);
 
   const seedAttempted = useRef(false);
   const dateInputRef = useRef(null);
+  const cardRefs = useRef(new Map());
+  const dragOrderRef = useRef(null);
 
   // Firestore is the source of truth; its IndexedDB cache covers offline/refresh.
   useEffect(() => {
@@ -178,8 +187,16 @@ export default function TrackingPage() {
 
   const hiddenItems = useMemo(() => items.filter((item) => item.archived), [items]);
 
+  const visibleItems = useMemo(
+    () => items.filter((item) => !item.archived).sort(byOrder),
+    [items]
+  );
+
   const displaySummary = useMemo(() => {
-    return items.filter((item) => !item.archived).map((item) => {
+    const ordered = dragOrder
+      ? dragOrder.map((id) => visibleItems.find((item) => item.id === id)).filter(Boolean)
+      : visibleItems;
+    return ordered.map((item) => {
       const selectedLevel = logs[selectedDate]?.[item.id] || null;
       const levelMeta = selectedLevel ? getLevelMeta(selectedLevel) : null;
       return {
@@ -188,7 +205,7 @@ export default function TrackingPage() {
         levelMeta,
       };
     });
-  }, [items, logs, selectedDate]);
+  }, [visibleItems, dragOrder, logs, selectedDate]);
 
   const changeDate = (daysOffset) => {
     const date = new Date(selectedDate);
@@ -239,7 +256,10 @@ export default function TrackingPage() {
       return;
     }
 
-    trackWrite(`add "${trimmed}"`, () => addDoc(collection(db, ITEMS_COLLECTION), { name: trimmed }));
+    const order = items.reduce((max, item) => Math.max(max, item.order ?? -1), -1) + 1;
+    trackWrite(`add "${trimmed}"`, () =>
+      addDoc(collection(db, ITEMS_COLLECTION), { name: trimmed, order })
+    );
     setNewItemName('');
   };
 
@@ -273,6 +293,68 @@ export default function TrackingPage() {
       setDoc(doc(db, ITEMS_COLLECTION, id), { name: trimmed }, { merge: true })
     );
     return true;
+  };
+
+  // Rewrites `order` for every visible item so legacy (unordered) items get one too.
+  const saveOrder = (ids) => {
+    const current = visibleItems.map((item) => item.id);
+    const unchanged =
+      ids.every((id, index) => id === current[index]) &&
+      visibleItems.every((item, index) => item.order === index);
+    if (unchanged) return;
+
+    trackWrite('reorder items', () => {
+      const batch = writeBatch(db);
+      ids.forEach((id, index) => {
+        batch.set(doc(db, ITEMS_COLLECTION, id), { order: index }, { merge: true });
+      });
+      return batch.commit();
+    });
+  };
+
+  const moveItem = (id, offset) => {
+    const ids = visibleItems.map((item) => item.id);
+    const from = ids.indexOf(id);
+    const to = from + offset;
+    if (from === -1 || to < 0 || to >= ids.length) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, id);
+    saveOrder(ids);
+  };
+
+  const updateDragOrder = (ids) => {
+    dragOrderRef.current = ids;
+    setDragOrder(ids);
+  };
+
+  const startDrag = (event, id) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDraggingId(id);
+    updateDragOrder(visibleItems.map((item) => item.id));
+  };
+
+  // The dragged card goes after every other card whose midpoint is above the pointer.
+  const continueDrag = (event) => {
+    const current = dragOrderRef.current;
+    if (!draggingId || !current) return;
+
+    const others = current.filter((id) => id !== draggingId);
+    const target = others.filter((id) => {
+      const rect = cardRefs.current.get(id)?.getBoundingClientRect();
+      return rect && rect.top + rect.height / 2 < event.clientY;
+    }).length;
+
+    const next = [...others];
+    next.splice(target, 0, draggingId);
+    if (next.some((id, index) => id !== current[index])) updateDragOrder(next);
+  };
+
+  const endDrag = () => {
+    if (dragOrderRef.current) saveOrder(dragOrderRef.current);
+    dragOrderRef.current = null;
+    setDragOrder(null);
+    setDraggingId(null);
   };
 
   const setLevel = (itemId, levelKey) => {
@@ -399,7 +481,18 @@ export default function TrackingPage() {
         <div className="grid gap-4">
           {displaySummary.map((item) => {
             return (
-              <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div
+                key={item.id}
+                ref={(node) => {
+                  if (node) cardRefs.current.set(item.id, node);
+                  else cardRefs.current.delete(item.id);
+                }}
+                className={`rounded-2xl border bg-white p-4 shadow-sm transition-shadow dark:bg-slate-900 ${
+                  draggingId === item.id
+                    ? 'relative z-10 border-sky-400 shadow-lg ring-2 ring-sky-400/40'
+                    : 'border-slate-200 dark:border-slate-800'
+                }`}
+              >
                 <div className="flex min-w-0 items-center gap-2">
                   {editing && (
                     <button
@@ -426,6 +519,33 @@ export default function TrackingPage() {
                     <span className={`h-2 w-2 rounded-full ${item.levelMeta ? item.levelMeta.color : 'bg-slate-300 dark:bg-slate-600'}`} />
                     {item.levelMeta ? item.levelMeta.label : 'Not set'}
                   </span>
+                  {editing && (
+                    <button
+                      type="button"
+                      onPointerDown={(event) => startDrag(event, item.id)}
+                      onPointerMove={continueDrag}
+                      onPointerUp={endDrag}
+                      onPointerCancel={endDrag}
+                      onKeyDown={(event) => {
+                        if (event.key === 'ArrowUp') {
+                          event.preventDefault();
+                          moveItem(item.id, -1);
+                        }
+                        if (event.key === 'ArrowDown') {
+                          event.preventDefault();
+                          moveItem(item.id, 1);
+                        }
+                      }}
+                      aria-label={`Reorder ${item.name} (drag, or use arrow keys)`}
+                      className={`flex h-9 w-9 shrink-0 touch-none select-none items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200 ${
+                        draggingId === item.id ? 'cursor-grabbing' : 'cursor-grab'
+                      }`}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="h-5 w-5">
+                        <path d="M5 8h14M5 12h14M5 16h14" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
 
                 <div
